@@ -21,6 +21,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "tunnel": "bun run client/tunnel-client.ts",
     "server": "node server/server.mjs"
   },
@@ -36,8 +37,10 @@
     }
   },
   "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.14",
+    "jsonwebtoken": "^9.0.2",
     "typescript": "^5.0.0"
   }
 }
