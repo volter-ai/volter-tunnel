@@ -1,0 +1,43 @@
+{
+  "name": "@volter/tunnel",
+  "version": "1.0.0",
+  "description": "Volter tunnel — WebSocket-based HTTP/WS reverse tunnel: a relay server plus a client connector library and CLI.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "bin": {
+    "volter-tunnel": "./client/tunnel-client.ts"
+  },
+  "main": "./client/tunnel-client.ts",
+  "types": "./client/tunnel-client.ts",
+  "exports": {
+    ".": "./client/tunnel-client.ts",
+    "./client": "./client/tunnel-client.ts",
+    "./server": "./server/server.mjs"
+  },
+  "files": [
+    "client",
+    "server",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "tunnel": "bun run client/tunnel-client.ts",
+    "server": "node server/server.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "peerDependencies": {
+    "jsonwebtoken": "^9.0.0"
+  },
+  "peerDependenciesMeta": {
+    "jsonwebtoken": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.14",
+    "typescript": "^5.0.0"
+  }
+}
