@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 /**
  * WebSocket-based HTTP tunnel client.
  *
