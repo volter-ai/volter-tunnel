@@ -95,6 +95,7 @@ export function stripTokenParam(pathWithQuery: string): string {
   try {
     const u = new URL(pathWithQuery, 'http://placeholder');
     u.searchParams.delete('__volter_token');
+    u.searchParams.delete('__tunnel');
     const search = u.searchParams.toString();
     return u.pathname + (search ? '?' + search : '');
   } catch {
