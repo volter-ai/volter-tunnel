@@ -79,6 +79,23 @@ npm install && node server.mjs
 
 Client and relay must share the same `TUNNEL_SECRET`.
 
+## Server — scalable relay (Cloudflare Workers + Durable Objects)
+
+`server/` (the Fly relay) is a single stateful process and does not scale
+horizontally. For large/global scale there is a drop-in alternative in
+`server-cf/`: a Cloudflare **Worker** that routes by subdomain to **one Durable
+Object per tunnelId**, which holds the client's control socket (hibernatable, so
+idle tunnels are ~free). Same wire protocol and client — the only client-visible
+change is that `createTunnel` appends `?id=<tunnelId>` to the control URL so the
+Worker can pick the right DO (the Fly relay tolerates and ignores it).
+
+```bash
+cd server-cf
+npm run dev      # wrangler dev --local (real workerd)
+npm test         # vitest: real Worker+DO + createTunnel, no mocks
+npm run deploy   # wrangler deploy (needs a CF zone for the wildcard host)
+```
+
 ## Layout
 
 ```

@@ -1,6 +1,6 @@
 {
   "name": "@volter/tunnel",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Volter tunnel — WebSocket-based HTTP/WS reverse tunnel: a relay server plus a client connector library and CLI.",
   "type": "module",
   "license": "UNLICENSED",
@@ -21,7 +21,8 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "test": "bun test ./test",
+    "test:cf": "cd server-cf && vitest run",
     "tunnel": "bun run client/tunnel-client.ts",
     "server": "node server/server.mjs"
   },

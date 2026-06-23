@@ -14,7 +14,11 @@ import https from 'node:https';
 import net from 'node:net';
 import WebSocket from 'ws';
 
-/** Force HTTP/1.1 for WebSocket connections — HTTP/2 breaks the Upgrade handshake. */
+/**
+ * Force HTTP/1.1 for the (TLS) control WebSocket — HTTP/2 breaks the Upgrade
+ * handshake. Only applies to wss:// (an https.Agent rejects a plain ws:// URL),
+ * so it's used conditionally; plain ws:// (e.g. a local relay) needs no agent.
+ */
 const http1Agent = new https.Agent({ ALPNProtocols: ['http/1.1'] });
 
 /** Minimal logger interface for tunnel client — compatible with pino, console, etc. */
@@ -266,7 +270,14 @@ export function createTunnel({
   logger,
 }: TunnelOptions): Promise<TunnelHandle> {
   const log = logger ?? defaultLogger;
-  const wsUrl = `${host.replace(/^http/, 'ws')}/ws`;
+  // Include the tunnelId in the control URL so a routing relay (e.g. the
+  // Cloudflare Workers + Durable Objects relay) can pick the right backend at
+  // upgrade time, before the `register` message is sent. The Fly relay ignores
+  // the query param and reads tunnelId from `register`, so one client works
+  // against both servers.
+  const wsUrl =
+    `${host.replace(/^http/, 'ws')}/ws` +
+    (tunnelId ? `?id=${encodeURIComponent(tunnelId)}` : '');
 
   // Resolved loopback address for this port (set before first connection)
   let localHost = '127.0.0.1';
@@ -285,7 +296,7 @@ export function createTunnel({
   ): void {
     if (closed) return;
 
-    const ws = new WebSocket(wsUrl, { agent: http1Agent });
+    const ws = new WebSocket(wsUrl, wsUrl.startsWith('wss:') ? { agent: http1Agent } : {});
     let registered = false;
     // Hoisted so every teardown path (a reconnect via the 'close' handler, or an
     // explicit handle.close()) can clear it. It used to be declared inside the

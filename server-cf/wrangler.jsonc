@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "volter-tunnel",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-06-16",
+  "observability": { "enabled": true },
+
+  "durable_objects": {
+    "bindings": [{ "name": "TUNNEL", "class_name": "TunnelDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TunnelDO"] }],
+
+  // Public base domain for tunnel URLs. Override per-env / via `--var` in tests.
+  "vars": { "TUNNEL_DOMAIN": "vgit-tunnels.volterapp.com" },
+
+  // workers_dev gives <name>.<acct>.workers.dev for early testing. The wildcard
+  // route below is added at cutover, once the zone is on Cloudflare.
+  "workers_dev": true
+  // "routes": [
+  //   { "pattern": "*.vgit-tunnels.volterapp.com/*", "zone_name": "vgit-tunnels.volterapp.com" }
+  // ]
+
+  // Secrets (set via `wrangler secret put` in prod, `.dev.vars` locally):
+  //   TUNNEL_SECRET, JWT_SECRET
+}

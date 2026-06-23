@@ -422,8 +422,10 @@ server.on('upgrade', (req, socket, head) => {
 
   const tunnelId = getTunnelIdFromHost(req.headers.host);
 
-  // No subdomain + /ws path → control channel for tunnel clients
-  if (!tunnelId && req.url === '/ws') {
+  // No subdomain + /ws path → control channel for tunnel clients.
+  // Tolerate a query string (the client appends ?id=<tunnelId> so a routing
+  // relay can pick its backend; this server reads tunnelId from `register`).
+  if (!tunnelId && req.url && req.url.split('?')[0] === '/ws') {
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit('connection', ws, req);
     });
