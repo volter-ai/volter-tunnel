@@ -29,6 +29,12 @@ export default {
       return routeToDO(env, id, request);
     }
 
+    // Direct tunnel addressing for hosts without a per-tunnel subdomain — e.g.
+    // *.workers.dev (Cloudflare rejects a foreign Host) or local testing.
+    // `?__tunnel=<id>` is stripped before the request is forwarded downstream.
+    const override = url.searchParams.get('__tunnel');
+    if (override) return routeToDO(env, override, request);
+
     const tunnelId = getTunnelIdFromHost(request.headers.get('host'), env.TUNNEL_DOMAIN);
 
     if (!tunnelId) {
