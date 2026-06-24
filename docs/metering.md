@@ -30,14 +30,23 @@ accounts and credentials.
   ngrok-style split: **only root may raise limits**, so a leaked service token can
   never uncap spend.
 
-- **Credits** — the single blended spend unit. `credits = w_req·requests +
-  w_ws·wsUpgrades + w_byte·bytes + w_sec·tunnelSeconds`. Defaults charge **1 per
-  HTTP request and per WS upgrade**; bytes (free egress on Workers) and
-  tunnel-seconds (gated by the concurrency cap) are weight 0 but tracked for
-  dashboards. Weights live in `src/credits.ts`.
+- **Credits = money.** Credits are **ops** — the universal Cloudflare billable
+  unit. Every event that wakes/charges the relay's DO is 1 op: an HTTP request, a
+  WS upgrade, and **each relayed message** (a streamed response chunk or a
+  WebSocket frame). Metering messages — not just the opening request — is what
+  makes a dollar cap hold for streaming/WS-heavy tunnels. `1 op = COST_PER_OP_USD`
+  (~$1/million, conservative; covers DO+Worker requests + a duration margin), so
+  op-limits are a hard dollar cap. Bytes/seconds are weight 0 (egress is free;
+  idle duration ≈ 0 under hibernation). Weights + cost in `src/credits.ts`.
 
-- **Limits** — every account has a **daily and monthly** credit cap, plus a
-  `concurrentMax` (open-tunnel cap) and a `leaseChunk`.
+- **Limits — in dollars.** Every account has a **daily and monthly** cap, set in
+  money via the admin API (`{ dayUsd, monthUsd }`, converted to op-credits) or as
+  raw op-credits, plus a `concurrentMax` and a `leaseChunk`. Defaults: **$10/day,
+  $100/month** (internal included). Usage is reported in both ops and dollars.
+
+  Message metering is **off the critical path** (counted per frame, charged in
+  batches fire-and-forget) so it never adds latency to the relay; a chatty WS is
+  closed (`1011`) once its account's budget is spent. Overshoot ≤ one batch.
 
 ## Topology (Durable Objects)
 
