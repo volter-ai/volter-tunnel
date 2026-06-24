@@ -16,6 +16,9 @@ export interface Env extends MeteringEnv {
    *  (full per-tunnel isolation). Default: a JWT with a `tid` is still bound to
    *  that tunnel, but a JWT without one is accepted on any tunnel (shared SSO). */
   REQUIRE_TID?: string;
+  /** Idle days before a reserved tunnelId may be reclaimed by another account on
+   *  contention (DECISIONS D5). Default 60. */
+  RESERVATION_IDLE_TTL_DAYS?: string;
 }
 
 /** Extract the tunnelId from a Host header: `<id>.<domain>` → `<id>`. Port-tolerant. */

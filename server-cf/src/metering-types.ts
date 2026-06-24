@@ -112,3 +112,38 @@ export function envNum(v: string | undefined, fallback: number): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
+
+/** Persistent per-tunnelId ownership record (lives in the TunnelDO's storage).
+ *  There is exactly one per tunnelId, so it is globally consistent by
+ *  construction — no central index needed. */
+export interface Reservation {
+  ownerSlug: string;
+  /** Date.now() of the last (re)register or disconnect — the idle clock that the
+   *  reclaim TTL is measured against. */
+  lastSeenAt: number;
+}
+
+export type ReservationVerdict = 'claim' | 'refresh' | 'reclaim' | 'reject';
+
+/**
+ * Decide what a register attempt may do to a tunnelId's reservation (DECISIONS
+ * D5 — lazy reclaim-on-contention):
+ *   - no reservation                         → 'claim'   (first reserver wins)
+ *   - owned by this account                  → 'refresh' (reset the idle clock)
+ *   - owned by another, idle longer than ttl → 'reclaim' (hand it over)
+ *   - owned by another, still within ttl     → 'reject'  (held; stays stable)
+ *
+ * Pure on purpose: the reclaim math is unit-testable without a Durable Object or
+ * time travel. Legacy shared-secret clients all share the internal slug, so they
+ * 'refresh' each other rather than contend.
+ */
+export function reservationDecision(
+  reservation: Reservation | undefined | null,
+  slug: string,
+  now: number,
+  ttlMs: number
+): ReservationVerdict {
+  if (!reservation) return 'claim';
+  if (reservation.ownerSlug === slug) return 'refresh';
+  return now - reservation.lastSeenAt > ttlMs ? 'reclaim' : 'reject';
+}
