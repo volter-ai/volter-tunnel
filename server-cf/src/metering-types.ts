@@ -36,6 +36,10 @@ export interface MeteringEnv {
    *  Absent in local/test → rollups are skipped (best-effort). */
   USAGE_AE?: AnalyticsEngineDataset;
 
+  /** TunnelDO namespace — present on the worker env; surfaced here so the
+   *  RegistryDO can revoke a reserved handle by routing to its TunnelDO (#3). */
+  TUNNEL?: DurableObjectNamespace;
+
   /** GitHub API base for signup identity verification (#2). Default
    *  https://api.github.com; tests point it at a local stub. */
   GITHUB_API_BASE?: string;
@@ -140,6 +144,8 @@ export interface Reservation {
   /** Date.now() of the last (re)register or disconnect — the idle clock that the
    *  reclaim TTL is measured against. */
   lastSeenAt: number;
+  /** The reserved tunnelId (so revocation can release the slot on the account). */
+  tunnelId?: string;
 }
 
 export type ReservationVerdict = 'claim' | 'refresh' | 'reclaim' | 'reject';
