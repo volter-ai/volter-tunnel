@@ -107,7 +107,7 @@ beforeAll(async () => {
   // Boot the Worker + DO in real workerd via wrangler's programmatic API.
   // Resolves only once the dev server is ready; manages its own port.
   worker = await unstable_dev('src/worker.ts', {
-    config: 'wrangler.jsonc',
+    config: 'wrangler.test.jsonc',
     local: true,
     vars: { TUNNEL_DOMAIN: DOMAIN, TUNNEL_SECRET: SECRET, JWT_SECRET },
     experimental: { disableExperimentalWarning: true },

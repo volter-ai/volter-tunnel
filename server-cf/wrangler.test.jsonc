@@ -1,0 +1,14 @@
+{
+  // Test-only config for `unstable_dev` (vitest). Identical to wrangler.jsonc but
+  // WITHOUT the production `routes` block — a routes block makes wrangler's local
+  // dev server rewrite the request Host, which breaks the subdomain routing the
+  // tests exercise. TUNNEL_DOMAIN / secrets are injected via the test's `vars`.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "volter-tunnel-test",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-06-16",
+  "durable_objects": {
+    "bindings": [{ "name": "TUNNEL", "class_name": "TunnelDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TunnelDO"] }]
+}

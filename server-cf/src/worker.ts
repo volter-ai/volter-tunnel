@@ -32,8 +32,16 @@ export default {
     // Direct tunnel addressing for hosts without a per-tunnel subdomain — e.g.
     // *.workers.dev (Cloudflare rejects a foreign Host) or local testing.
     // `?__tunnel=<id>` is stripped before the request is forwarded downstream.
+    // Gated to direct hosts only: on the production wildcard domain, tunnels must
+    // be reached by their own subdomain so per-tunnel cookie/host isolation holds.
+    const host = request.headers.get('host') || '';
+    const isDirectHost =
+      host.endsWith('.workers.dev') ||
+      host.startsWith('127.0.0.1') ||
+      host.startsWith('localhost') ||
+      host.startsWith('0.0.0.0');
     const override = url.searchParams.get('__tunnel');
-    if (override) return routeToDO(env, override, request);
+    if (override && isDirectHost) return routeToDO(env, override, request);
 
     const tunnelId = getTunnelIdFromHost(request.headers.get('host'), env.TUNNEL_DOMAIN);
 
