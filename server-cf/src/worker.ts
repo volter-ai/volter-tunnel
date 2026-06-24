@@ -24,21 +24,7 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // Management plane — token/account/usage admin. Routed to the single
-    // RegistryDO, which authenticates (root or service token) and coordinates.
-    // Self-serve signup (#2) is unauthenticated by design — it establishes
-    // identity via GitHub — and shares the same RegistryDO.
-    if (
-      url.pathname === '/admin' ||
-      url.pathname.startsWith('/admin/') ||
-      url.pathname === '/signup' ||
-      url.pathname.startsWith('/signup/')
-    ) {
-      const id = env.REGISTRY.idFromName('registry');
-      return env.REGISTRY.get(id).fetch(request);
-    }
-
-    // Control channel — the client tells us which DO it belongs to via ?id=.
+    // Control channel — host-independent; the client names its DO via ?id=.
     if (url.pathname === '/ws') {
       const id = url.searchParams.get('id');
       if (!id) return new Response('missing tunnel id', { status: 400 });
@@ -61,16 +47,30 @@ export default {
 
     const tunnelId = getTunnelIdFromHost(request.headers.get('host'), env.TUNNEL_DOMAIN);
 
-    if (!tunnelId) {
-      if (url.pathname.startsWith('/__volter_auth')) {
-        return handleCookieBootstrap(request, url, env);
-      }
-      if (url.pathname === '/api/status') {
-        return Response.json({ ok: true, relay: 'cloudflare-do' });
-      }
-      return new Response('volter-tunnel (cloudflare)', { status: 200 });
-    }
+    // On a tunnel subdomain EVERYTHING forwards to the tunnel — paths like
+    // /admin, /signup, /report are management routes only on the apex, never on a
+    // tunnel host (otherwise a tunneled app's own /signup page would be hijacked).
+    if (tunnelId) return routeToDO(env, tunnelId, request);
 
-    return routeToDO(env, tunnelId, request);
+    // Apex (no subdomain): management plane (admin), self-serve signup (#2,
+    // unauthenticated — identity via GitHub), and abuse reports (#3). All share
+    // the single RegistryDO.
+    if (
+      url.pathname === '/admin' ||
+      url.pathname.startsWith('/admin/') ||
+      url.pathname === '/signup' ||
+      url.pathname.startsWith('/signup/') ||
+      url.pathname === '/report'
+    ) {
+      const id = env.REGISTRY.idFromName('registry');
+      return env.REGISTRY.get(id).fetch(request);
+    }
+    if (url.pathname.startsWith('/__volter_auth')) {
+      return handleCookieBootstrap(request, url, env);
+    }
+    if (url.pathname === '/api/status') {
+      return Response.json({ ok: true, relay: 'cloudflare-do' });
+    }
+    return new Response('volter-tunnel (cloudflare)', { status: 200 });
   },
 };

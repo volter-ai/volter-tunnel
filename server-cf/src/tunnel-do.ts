@@ -354,6 +354,17 @@ export class TunnelDO extends DurableObject<Env> {
     const url = new URL(request.url);
     const upgrade = request.headers.get('Upgrade');
 
+    // Internal admin: revoke this tunnelId's reservation (#3). Reached only via a
+    // DO-to-DO call from the RegistryDO after it has authenticated root; gated by
+    // the root token so a browser hitting this path on the tunnel host can't.
+    if (url.pathname === '/__internal/revoke-reservation') {
+      const bearer = (request.headers.get('authorization') || '').replace(/^Bearer /, '');
+      if (!this.env.ROOT_TOKEN || !safeEqual(bearer, this.env.ROOT_TOKEN)) {
+        return new Response('forbidden', { status: 403 });
+      }
+      return this.revokeReservation();
+    }
+
     // Control channel: the tunnel client connects to /ws?id=<tunnelId>.
     if (url.pathname === '/ws') {
       if (upgrade !== 'websocket') return new Response('expected websocket', { status: 426 });
@@ -365,6 +376,24 @@ export class TunnelDO extends DurableObject<Env> {
 
     // Plain HTTP data request.
     return this.handleHttpRequest(request, url);
+  }
+
+  /** Revoke this tunnelId's reservation (#3): release the slot on the owner's
+   *  account, clear the persistent record, and disconnect any live client. */
+  private async revokeReservation(): Promise<Response> {
+    const res = await this.ctx.storage.get<Reservation>('reservation');
+    if (res?.tunnelId) {
+      await this.accountRpc('/release-id', { tunnelId: res.tunnelId }, res.ownerSlug);
+    }
+    await this.ctx.storage.delete('reservation');
+    for (const w of this.ctx.getWebSockets('ctl')) {
+      try {
+        (w as WebSocket).close(4010, 'Reservation revoked');
+      } catch {
+        /* already gone */
+      }
+    }
+    return Response.json({ ok: true, revoked: !!res, slug: res?.ownerSlug ?? null });
   }
 
   // ── control socket helpers ────────────────────────────────────────────────
@@ -674,7 +703,7 @@ export class TunnelDO extends DurableObject<Env> {
       const res = await this.ctx.storage.get<Reservation>('reservation');
       if (res && res.ownerSlug === attach.slug) {
         await this.ctx.storage.put('reservation', {
-          ownerSlug: res.ownerSlug,
+          ...res,
           lastSeenAt: Date.now(),
         } satisfies Reservation);
       }
@@ -844,6 +873,7 @@ export class TunnelDO extends DurableObject<Env> {
       await this.ctx.storage.put('reservation', {
         ownerSlug: slug,
         lastSeenAt: Date.now(),
+        tunnelId,
       } satisfies Reservation);
 
       // Reclaimed from another account past its idle TTL → free the reserved-id

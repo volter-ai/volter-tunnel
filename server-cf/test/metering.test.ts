@@ -983,3 +983,68 @@ describe('reserved-id count cap (#3)', () => {
     expect(res.ok).toBe(true);
   }, 15000);
 });
+
+describe('handle revocation (#3)', () => {
+  test('root can revoke a reserved handle, freeing it for another account', async () => {
+    // cap reserves it, disconnects — the id stays reserved to cap.
+    const owner = rawRegister(port, 'revoke-me', capApi);
+    expect((await owner.result).ok).toBe(true);
+    try {
+      owner.ws.close();
+    } catch {
+      /* ignore */
+    }
+
+    // A different account is refused while cap owns it.
+    const before = rawRegister(port, 'revoke-me', hdrApi);
+    expect((await before.result).code).toBe(4002);
+    try {
+      before.ws.close();
+    } catch {
+      /* ignore */
+    }
+
+    // Root revokes the handle.
+    const revoke = await admin(port, 'DELETE', '/admin/reservations/revoke-me', ROOT_TOKEN);
+    expect(revoke.status).toBe(200);
+    expect(revoke.json.revoked).toBe(true);
+
+    // Now the other account can take it.
+    const after = rawRegister(port, 'revoke-me', hdrApi);
+    const res = await after.result;
+    try {
+      after.ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(res.ok).toBe(true);
+  }, 20000);
+
+  test('a non-root caller cannot revoke (403)', async () => {
+    const r = await admin(port, 'DELETE', '/admin/reservations/anything', acmeService);
+    expect(r.status).toBe(403);
+  });
+});
+
+describe('abuse reports (#3)', () => {
+  test('anyone can file a report; root can review them', async () => {
+    const filed = await admin(port, 'POST', '/report', null, { tunnelId: 'phishy', reason: 'phishing' });
+    expect(filed.status).toBe(200);
+    expect(filed.json.ok).toBe(true);
+
+    const list = await admin(port, 'GET', '/admin/reports', ROOT_TOKEN);
+    expect(list.status).toBe(200);
+    const reports = list.json.reports as Array<{ tunnelId: string; reason: string }>;
+    expect(reports.some((r) => r.tunnelId === 'phishy' && r.reason === 'phishing')).toBe(true);
+  });
+
+  test('a report without a tunnelId is rejected (400)', async () => {
+    const r = await admin(port, 'POST', '/report', null, { reason: 'no target' });
+    expect(r.status).toBe(400);
+  });
+
+  test('reviewing reports requires root (403)', async () => {
+    const r = await admin(port, 'GET', '/admin/reports', acmeService);
+    expect(r.status).toBe(403);
+  });
+});

@@ -42,6 +42,16 @@ interface DirEntry {
   reservedMax: number;
 }
 
+/** A user-submitted abuse report against a tunnel (#3). */
+interface Report {
+  tunnelId: string;
+  reason: string;
+  at: string;
+}
+
+/** Max abuse reports retained (operators review then act / revoke). */
+const REPORTS_CAP = 200;
+
 type Auth = { kind: 'root' } | { kind: 'service'; slug: string } | null;
 
 function json(data: unknown, status = 200): Response {
@@ -56,6 +66,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
   private rootHash: string | null = null;
   private accounts = new Map<string, DirEntry>();
   private tokens = new Map<string, TokenRecord>();
+  private reports: Report[] = [];
   private loaded: Promise<void>;
 
   constructor(ctx: DurableObjectState, env: MeteringEnv) {
@@ -63,6 +74,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     this.loaded = ctx.blockConcurrencyWhile(async () => {
       this.accounts = new Map(Object.entries((await ctx.storage.get<Record<string, DirEntry>>('accounts')) ?? {}));
       this.tokens = new Map(Object.entries((await ctx.storage.get<Record<string, TokenRecord>>('tokens')) ?? {}));
+      this.reports = (await ctx.storage.get<Report[]>('reports')) ?? [];
     });
   }
 
@@ -223,11 +235,32 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       }
     }
 
+    // Public abuse report (#3) — unauthenticated; anyone can flag a tunnel.
+    if (url.pathname === '/report') {
+      if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
+      return this.addReport((await request.json().catch(() => ({}))) as Record<string, unknown>);
+    }
+
     // Fleet usage summary (root): every account's live usage + dollars in one call.
     if (parts[0] === 'admin' && parts[1] === 'usage' && request.method === 'GET') {
       const auth = await this.authenticate(request);
       if (auth?.kind !== 'root') return json({ error: 'root token required' }, 403);
       return json(await this.usageSummary());
+    }
+
+    // Operator review of abuse reports (root).
+    if (parts[0] === 'admin' && parts[1] === 'reports' && request.method === 'GET') {
+      const auth = await this.authenticate(request);
+      if (auth?.kind !== 'root') return json({ error: 'root token required' }, 403);
+      return json({ reports: this.reports });
+    }
+
+    // Revoke a reserved handle (#3, root): DELETE /admin/reservations/:tunnelId.
+    if (parts[0] === 'admin' && parts[1] === 'reservations' && parts[2]) {
+      const auth = await this.authenticate(request);
+      if (auth?.kind !== 'root') return json({ error: 'root token required' }, 403);
+      if (request.method !== 'DELETE') return json({ error: 'method not allowed' }, 405);
+      return this.revokeReservationForward(parts[2]);
     }
 
     if (parts[0] !== 'admin' || parts[1] !== 'accounts') {
@@ -424,6 +457,31 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     for (const c of contents) if (await this.validNonce(c)) ok = true;
     if (!ok) return json({ error: 'no valid verification nonce in gist' }, 401);
     return this.finalizeSignup(owner.id, owner.login);
+  }
+
+  // ── abuse controls (#3) ──────────────────────────────────────────────────────
+  private async addReport(body: Record<string, unknown>): Promise<Response> {
+    const tunnelId = String(body.tunnelId ?? '').trim();
+    if (!tunnelId) return json({ error: 'missing tunnelId' }, 400);
+    const reason = String(body.reason ?? '').slice(0, 500);
+    this.reports.push({ tunnelId, reason, at: new Date().toISOString() });
+    if (this.reports.length > REPORTS_CAP) this.reports.splice(0, this.reports.length - REPORTS_CAP);
+    await this.ctx.storage.put('reports', this.reports);
+    return json({ ok: true });
+  }
+
+  /** Revoke a reserved handle by routing to its TunnelDO (which clears the
+   *  reservation, releases the account slot, and disconnects any live client).
+   *  Forwards the root token so the TunnelDO's internal endpoint accepts it. */
+  private async revokeReservationForward(tunnelId: string): Promise<Response> {
+    if (!this.env.TUNNEL) return json({ error: 'tunnel binding unavailable' }, 500);
+    const id = this.env.TUNNEL.idFromName(tunnelId);
+    const r = await this.env.TUNNEL.get(id).fetch('https://tunnel/__internal/revoke-reservation', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${this.env.ROOT_TOKEN ?? ''}` },
+    });
+    const data = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+    return json({ tunnelId, ...data }, r.status);
   }
 
   // ── handlers ──────────────────────────────────────────────────────────────────
