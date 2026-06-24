@@ -149,6 +149,7 @@ let sharedApi: string;
 let revApi: string;
 let revService: string;
 let wscapApi: string;
+let rezcapApi: string;
 let dollarsService: string;
 let dollarsAccount: { dayLimit: number; monthLimit: number };
 
@@ -186,6 +187,7 @@ beforeAll(async () => {
       GLOBAL_MONTH_LIMIT: '200000',
       DEFAULT_CONCURRENT: '100',
       DEFAULT_LEASE_CHUNK: '50',
+      DEFAULT_RESERVED_MAX: '50', // high default so multi-id test accounts aren't capped
     },
     experimental: { disableExperimentalWarning: true },
   });
@@ -308,6 +310,21 @@ beforeAll(async () => {
   });
   dollarsService = dollars.json.serviceToken as string;
   dollarsAccount = dollars.json.account as { dayLimit: number; monthLimit: number };
+
+  // rezcap: reservedMax 2, for the reserved-id count cap test (#3).
+  const rezcap = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
+    slug: 'rezcap',
+    name: 'Rezcap',
+    dayLimit: 20,
+    monthLimit: 100,
+    reservedMax: 2,
+  });
+  rezcapApi = (
+    await admin(port, 'POST', '/admin/accounts/rezcap/tokens', rezcap.json.serviceToken as string, {
+      kind: 'api',
+      label: 't',
+    })
+  ).json.token as string;
 }, 90000);
 
 afterAll(async () => {
@@ -913,6 +930,50 @@ describe('reserved-id ownership (idle reclaim-on-contention, DECISIONS D5)', () 
 
   test('the owning account keeps (refreshes) its own reserved id on reconnect', async () => {
     const again = rawRegister(port, 'rez-stable', capApi);
+    const res = await again.result;
+    try {
+      again.ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(res.ok).toBe(true);
+  }, 15000);
+});
+
+describe('reserved-id count cap (#3)', () => {
+  // `rezcap` has reservedMax 2. Reservations persist across disconnect, so two
+  // distinct ids fill the cap even after their tunnels close.
+  test('an account cannot reserve more distinct ids than its reservedMax', async () => {
+    const a = rawRegister(port, 'rezcap-a', rezcapApi);
+    expect((await a.result).ok).toBe(true);
+    try {
+      a.ws.close();
+    } catch {
+      /* ignore */
+    }
+
+    const b = rawRegister(port, 'rezcap-b', rezcapApi);
+    expect((await b.result).ok).toBe(true);
+    try {
+      b.ws.close();
+    } catch {
+      /* ignore */
+    }
+
+    // Third distinct id exceeds the cap → rejected.
+    const c = rawRegister(port, 'rezcap-c', rezcapApi);
+    const res = await c.result;
+    try {
+      c.ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe(4029);
+  }, 15000);
+
+  test('re-registering an already-held id is free (does not count against the cap)', async () => {
+    const again = rawRegister(port, 'rezcap-a', rezcapApi);
     const res = await again.result;
     try {
       again.ws.close();

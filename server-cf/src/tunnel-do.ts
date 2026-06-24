@@ -752,7 +752,8 @@ export class TunnelDO extends DurableObject<Env> {
       // on (re)register (below, after authorize) and on disconnect.
       const ttlMs = envNum(this.env.RESERVATION_IDLE_TTL_DAYS, 60) * 86_400_000;
       const reservation = await this.ctx.storage.get<Reservation>('reservation');
-      if (reservationDecision(reservation, slug, Date.now(), ttlMs) === 'reject') {
+      const verdict = reservationDecision(reservation, slug, Date.now(), ttlMs);
+      if (verdict === 'reject') {
         ws.send(
           JSON.stringify({
             type: 'error',
@@ -815,6 +816,12 @@ export class TunnelDO extends DurableObject<Env> {
         ownerSlug: slug,
         lastSeenAt: Date.now(),
       } satisfies Reservation);
+
+      // Reclaimed from another account past its idle TTL → free the reserved-id
+      // slot on the previous owner so its count reflects the loss (#1/#3).
+      if (verdict === 'reclaim' && reservation && reservation.ownerSlug !== slug) {
+        await this.accountRpc('/release-id', { tunnelId }, reservation.ownerSlug);
+      }
 
       const authRequired = msg.authRequired !== false;
       ws.serializeAttachment({

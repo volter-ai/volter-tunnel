@@ -39,6 +39,7 @@ interface DirEntry {
   monthLimit: number;
   concurrentMax: number;
   leaseChunk: number;
+  reservedMax: number;
 }
 
 type Auth = { kind: 'root' } | { kind: 'service'; slug: string } | null;
@@ -131,6 +132,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       monthLimit: e.monthLimit,
       concurrentMax: e.concurrentMax,
       leaseChunk: e.leaseChunk,
+      reservedMax: e.reservedMax ?? envNum(this.env.DEFAULT_RESERVED_MAX, 3),
     };
   }
 
@@ -275,6 +277,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
         monthLimit: Number(body.monthLimit ?? 0),
         concurrentMax: envNum(this.env.INTERNAL_CONCURRENT, 1000),
         leaseChunk: envNum(this.env.DEFAULT_LEASE_CHUNK, 50),
+        reservedMax: envNum(this.env.INTERNAL_RESERVED_MAX, 1_000_000),
       });
       await this.persistAccounts();
     }
@@ -303,6 +306,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       monthLimit,
       concurrentMax: envNum(body.concurrentMax as string | undefined, envNum(this.env.DEFAULT_CONCURRENT, 100)),
       leaseChunk: envNum(body.leaseChunk as string | undefined, envNum(this.env.DEFAULT_LEASE_CHUNK, 50)),
+      reservedMax: envNum(body.reservedMax as string | undefined, envNum(this.env.DEFAULT_RESERVED_MAX, 3)),
     };
     this.accounts.set(slug, entry);
     await this.persistAccounts();
@@ -396,6 +400,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     e.monthLimit = monthLimit;
     if (body.concurrentMax !== undefined) e.concurrentMax = Number(body.concurrentMax);
     if (body.leaseChunk !== undefined) e.leaseChunk = Number(body.leaseChunk);
+    if (body.reservedMax !== undefined) e.reservedMax = Number(body.reservedMax);
     this.accounts.set(slug, e);
     await this.persistAccounts();
     await this.pushConfig(slug);
