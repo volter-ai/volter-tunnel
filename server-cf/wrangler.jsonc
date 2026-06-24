@@ -57,7 +57,10 @@
     "RESERVATION_IDLE_TTL_DAYS": "60", //  idle days before a reserved id is reclaimable
 
     // ── Fair-use request burst (#4): 0 = off. e.g. "20" = 20 req/s/tunnel.
-    "BURST_RPS": "0"
+    "BURST_RPS": "0",
+
+    // ── Cost-DoS guard on the unauthenticated public surface (/signup/*, /report).
+    "SIGNUP_RPS": "5"
 
     // Optional (unset = off):
     //   SIGNUP_ALLOWED_USERS — allowlist mode (comma-separated GitHub logins).

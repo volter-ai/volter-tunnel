@@ -51,6 +51,10 @@ export interface MeteringEnv {
   SIGNUP_ALLOWED_USERS?: string;
   /** HMAC secret for stateless gist-proof nonces (#2). Falls back to ROOT_TOKEN. */
   SIGNUP_NONCE_SECRET?: string;
+  /** Rate limit (req/sec) for the unauthenticated public surface — /signup/* and
+   *  /report — guarding against cost-DoS. Default 5. Token bucket = 4×. */
+  SIGNUP_RPS?: string;
+  SIGNUP_BURST?: string;
 }
 
 /** Authoritative per-account configuration (lives in the AccountDO). */

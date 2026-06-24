@@ -128,6 +128,7 @@ beforeAll(async () => {
       SIGNUP_DAY_LIMIT: '1000',
       SIGNUP_MONTH_LIMIT: '20000',
       SIGNUP_ALLOWED_USERS: 'octocat, gistuser', // allowlist (with spaces, to test trimming)
+      SIGNUP_RPS: '1000', // high so the public rate limiter doesn't interfere with tests
       GITHUB_API_BASE: `http://127.0.0.1:${stubPort}`,
     },
     experimental: { disableExperimentalWarning: true },
@@ -174,15 +175,17 @@ describe('GitHub token-exchange signup', () => {
 });
 
 describe('gist-proof signup (no token sent to us)', () => {
-  test('issues a nonce, reads the public gist, and provisions the owner account', async () => {
+  test('issues a nonce + verifier, reads the public gist, and provisions the owner', async () => {
     const start = await post(port, '/signup/github/gist/start', {});
     expect(start.status).toBe(200);
     const nonce = start.json.nonce as string;
+    const verifier = start.json.verifier as string;
     expect(nonce.startsWith('volter-verify-')).toBe(true);
+    expect(typeof verifier).toBe('string');
 
-    // The user would put this nonce in a public gist; our stub now serves it.
+    // The user puts the NONCE (only) in a public gist; our stub now serves it.
     gistContent = nonce;
-    const verify = await post(port, '/signup/github/gist/verify', { gistId: 'abc123' });
+    const verify = await post(port, '/signup/github/gist/verify', { gistId: 'abc123', verifier });
     expect(verify.status).toBe(200);
     expect(verify.json.slug).toBe('gh-7777');
     expect(verify.json.login).toBe('gistuser');
@@ -191,8 +194,25 @@ describe('gist-proof signup (no token sent to us)', () => {
   }, 20000);
 
   test('a gist without a valid nonce is rejected (401)', async () => {
+    const start = await post(port, '/signup/github/gist/start', {});
     gistContent = 'not-a-real-nonce';
-    const verify = await post(port, '/signup/github/gist/verify', { gistId: 'abc123' });
+    const verify = await post(port, '/signup/github/gist/verify', {
+      gistId: 'abc123',
+      verifier: start.json.verifier,
+    });
     expect(verify.status).toBe(401);
+  });
+
+  test('ATTACK: someone who only sees the public gist (no verifier) cannot complete', async () => {
+    const start = await post(port, '/signup/github/gist/start', {});
+    // The attacker has the public nonce (it's in the gist) but NOT the verifier.
+    gistContent = start.json.nonce as string;
+    const noVerifier = await post(port, '/signup/github/gist/verify', { gistId: 'abc123' });
+    expect(noVerifier.status).toBe(400);
+    const wrongVerifier = await post(port, '/signup/github/gist/verify', {
+      gistId: 'abc123',
+      verifier: 'deadbeef'.repeat(8), // 64 hex chars, but not the real verifier
+    });
+    expect(wrongVerifier.status).toBe(401);
   });
 });

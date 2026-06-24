@@ -917,10 +917,15 @@ async function runLogin(opts: { host: string; method: 'token' | 'gist'; token?: 
 
   let resp: Record<string, unknown>;
   if (opts.method === 'gist') {
-    const { nonce } = (await postJson('/signup/github/gist/start', {})) as { nonce: string };
+    // The verifier is kept private (never placed in the public gist) — it binds
+    // this verify call to this login session.
+    const { nonce, verifier } = (await postJson('/signup/github/gist/start', {})) as {
+      nonce: string;
+      verifier: string;
+    };
     const url = sh('gh', ['gist', 'create', '-p', '-d', 'volter-tunnel identity verification', '-'], nonce);
     const gistId = url.split('/').pop() ?? '';
-    resp = await postJson('/signup/github/gist/verify', { gistId });
+    resp = await postJson('/signup/github/gist/verify', { gistId, verifier });
   } else {
     const token = opts.token ?? sh('gh', ['auth', 'token']);
     resp = await postJson('/signup/github', { token });

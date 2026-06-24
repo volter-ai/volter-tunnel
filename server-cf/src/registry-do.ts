@@ -27,8 +27,10 @@ import {
 } from './credits';
 import {
   type AccountConfig,
+  type BurstState,
   type MeteringEnv,
   type TokenRecord,
+  burstStep,
   envNum,
 } from './metering-types';
 
@@ -67,7 +69,15 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
   private accounts = new Map<string, DirEntry>();
   private tokens = new Map<string, TokenRecord>();
   private reports: Report[] = [];
+  /** Token bucket guarding the unauthenticated public surface (cost-DoS). */
+  private publicBurst: BurstState = { tokens: 0, last: 0, init: false };
   private loaded: Promise<void>;
+
+  /** True if the public-endpoint rate limit is currently exceeded. */
+  private publicRateLimited(): boolean {
+    const rps = envNum(this.env.SIGNUP_RPS, 5);
+    return burstStep(this.publicBurst, Date.now(), rps, envNum(this.env.SIGNUP_BURST, rps * 4)) > 0;
+  }
 
   constructor(ctx: DurableObjectState, env: MeteringEnv) {
     super(ctx, env);
@@ -217,6 +227,15 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     // its allocation against the global budget at self-bootstrap.
     if (url.pathname === '/reserve-internal') {
       return this.reserveInternal((await request.json().catch(() => ({}))) as Record<string, unknown>);
+    }
+
+    // Cost-DoS guard: rate-limit the unauthenticated public surface (signup +
+    // report) — they are not metered by the credit ceiling.
+    if (
+      (url.pathname.startsWith('/signup/') || url.pathname === '/report') &&
+      this.publicRateLimited()
+    ) {
+      return json({ error: 'rate limited' }, 429);
     }
 
     // Self-serve signup (#2) — unauthenticated; identity is proven via GitHub.
@@ -417,27 +436,35 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(input));
     return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
   }
-  /** Issue a signed, self-expiring nonce — stateless (no server storage). */
+  /** Issue a signed, self-expiring nonce + a private verifier — stateless. The
+   *  nonce is PUBLIC (goes in the gist); the verifier is returned only to the
+   *  caller and is NOT in the gist, so a third party who merely sees the public
+   *  gist cannot complete signup as its owner (binds /verify to whoever /started). */
   private async gistStart(): Promise<Response> {
     const payload = `${randomBase62(24)}.${Date.now() + 10 * 60_000}`;
     const nonce = `volter-verify-${payload}.${await this.hmacHex(payload)}`;
+    const verifier = await this.hmacHex(`v:${payload}`);
     return json({
       nonce,
+      verifier,
       instructions:
-        'Create a PUBLIC gist whose content is exactly this nonce, then POST { gistId } to /signup/github/gist/verify.',
+        'Create a PUBLIC gist whose content is exactly this nonce, then POST { gistId, verifier } to /signup/github/gist/verify.',
     });
   }
-  private async validNonce(nonce: string): Promise<boolean> {
+  /** Returns the nonce's payload if structurally valid, correctly signed, and
+   *  unexpired; else null. */
+  private async checkNonce(nonce: string): Promise<string | null> {
     const m = /^volter-verify-(.+)\.([0-9a-f]{64})$/.exec(nonce);
-    if (!m) return false;
+    if (!m) return null;
     const [, payload, sig] = m;
-    if (!safeEqualHex(await this.hmacHex(payload!), sig!)) return false;
+    if (!safeEqualHex(await this.hmacHex(payload!), sig!)) return null;
     const exp = Number(payload!.split('.')[1]);
-    return Number.isFinite(exp) && Date.now() < exp;
+    return Number.isFinite(exp) && Date.now() < exp ? payload! : null;
   }
   private async gistVerify(body: Record<string, unknown>): Promise<Response> {
     const gistId = String(body.gistId ?? '');
-    if (!gistId) return json({ error: 'missing gistId' }, 400);
+    const verifier = String(body.verifier ?? '');
+    if (!gistId || !verifier) return json({ error: 'missing gistId or verifier' }, 400);
     let gist: { owner?: { id?: number; login?: string }; files?: Record<string, { content?: string }> };
     try {
       const r = await fetch(`${this.githubBase()}/gists/${encodeURIComponent(gistId)}`, {
@@ -452,10 +479,17 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     if (!owner || typeof owner.id !== 'number' || !owner.login) {
       return json({ error: 'gist has no owner' }, 401);
     }
-    const contents = Object.values(gist.files ?? {}).map((f) => (f?.content ?? '').trim());
-    let ok = false;
-    for (const c of contents) if (await this.validNonce(c)) ok = true;
-    if (!ok) return json({ error: 'no valid verification nonce in gist' }, 401);
+    // Require a gist file holding a valid nonce AND the matching private verifier,
+    // so only the party that called /start (and holds the verifier) can complete.
+    let matched = false;
+    for (const f of Object.values(gist.files ?? {})) {
+      const payload = await this.checkNonce((f?.content ?? '').trim());
+      if (payload && safeEqualHex(await this.hmacHex(`v:${payload}`), verifier)) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) return json({ error: 'verification failed' }, 401);
     return this.finalizeSignup(owner.id, owner.login);
   }
 
