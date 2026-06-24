@@ -16,7 +16,14 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import { CREDIT_WEIGHTS, dayKey, monthKey, toCredits, type UsageDelta } from './credits';
-import type { AccountConfig, AuthorizeResult, MeteringEnv, UsageView } from './metering-types';
+import type {
+  AccountConfig,
+  AuthorizeResult,
+  LeaseResult,
+  MeteringEnv,
+  RateSnapshot,
+  UsageView,
+} from './metering-types';
 import { envNum } from './metering-types';
 
 interface Usage {
@@ -90,6 +97,32 @@ export class AccountDO extends DurableObject<MeteringEnv> {
   private monthRemaining(): number {
     if (!this.config) return 0;
     return this.config.monthLimit - this.usage.monthUsed - this.usage.leased;
+  }
+
+  /** Current limit windows + a coarse warn/exceeded level, for surfacing on the
+   *  data plane (RateLimit headers) and control plane (registered + quota push). */
+  private snapshot(): RateSnapshot {
+    const now = new Date();
+    const dayReset = Math.floor(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1) / 1000
+    );
+    const monthReset = Math.floor(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1) / 1000
+    );
+    const dayLimit = this.config?.dayLimit ?? 0;
+    const monthLimit = this.config?.monthLimit ?? 0;
+    const dayRem = Math.max(0, this.dayRemaining());
+    const monthRem = Math.max(0, this.monthRemaining());
+    const dayPct = dayLimit ? (dayLimit - dayRem) / dayLimit : 0;
+    const monthPct = monthLimit ? (monthLimit - monthRem) / monthLimit : 0;
+    const pct = Math.max(dayPct, monthPct);
+    const level: RateSnapshot['level'] =
+      dayRem <= 0 || monthRem <= 0 ? 'exceeded' : pct >= 0.8 ? 'warn' : 'ok';
+    return {
+      day: { limit: dayLimit, remaining: dayRem, reset: dayReset },
+      month: { limit: monthLimit, remaining: monthRem, reset: monthReset },
+      level,
+    };
   }
 
   /** Move `consumed` credits for a tunnel from leased → used. */
@@ -198,12 +231,10 @@ export class AccountDO extends DurableObject<MeteringEnv> {
       this.open.set(tunnelId, 0);
       await this.persistOpen();
     }
-    return { ok: true, slug: this.config.slug, leaseChunk: this.config.leaseChunk };
+    return { ok: true, slug: this.config.slug, leaseChunk: this.config.leaseChunk, rate: this.snapshot() };
   }
 
-  private async lease(
-    body: Record<string, unknown>
-  ): Promise<{ grant: number; over: boolean; dayRemaining: number; monthRemaining: number }> {
+  private async lease(body: Record<string, unknown>): Promise<LeaseResult> {
     const tunnelId = String(body.tunnelId ?? '');
     const want = Math.max(0, Number(body.want ?? 0));
     const commit = Math.max(0, Number(body.commit ?? 0));
@@ -213,7 +244,7 @@ export class AccountDO extends DurableObject<MeteringEnv> {
 
     if (!this.config || !this.open.has(tunnelId)) {
       await this.persistUsage();
-      return { grant: 0, over: true, dayRemaining: 0, monthRemaining: 0 };
+      return { grant: 0, over: true, rate: this.snapshot() };
     }
 
     const headroom = Math.min(this.dayRemaining(), this.monthRemaining());
@@ -224,9 +255,8 @@ export class AccountDO extends DurableObject<MeteringEnv> {
       await this.persistOpen();
     }
     await this.persistUsage();
-    const dayRem = this.dayRemaining();
-    const monthRem = this.monthRemaining();
-    return { grant, over: dayRem <= 0 || monthRem <= 0, dayRemaining: dayRem, monthRemaining: monthRem };
+    const rate = this.snapshot();
+    return { grant, over: rate.day.remaining <= 0 || rate.month.remaining <= 0, rate };
   }
 
   private async close(body: Record<string, unknown>): Promise<{ ok: true }> {

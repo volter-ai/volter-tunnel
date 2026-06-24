@@ -24,7 +24,7 @@ import {
   validateWsAuth,
 } from './auth';
 import { CREDIT_WEIGHTS, hashToken, parseToken, type UsageDelta } from './credits';
-import type { AuthorizeResult } from './metering-types';
+import type { AuthorizeResult, LeaseResult, RateSnapshot } from './metering-types';
 
 interface CtlAttach {
   role: 'ctl';
@@ -48,6 +48,8 @@ interface PendingHttp {
   timer: ReturnType<typeof setTimeout>;
   request: Request;
   bootstrapCookie: string | null;
+  /** RateLimit-* headers captured at request time, applied to the response. */
+  rate: Record<string, string>;
 }
 interface Streaming {
   controller: ReadableStreamDefaultController<Uint8Array>;
@@ -113,6 +115,10 @@ export class TunnelDO extends DurableObject<Env> {
   private rawSinceFlush: UsageDelta = { requests: 0, wsUpgrades: 0, bytes: 0, seconds: 0 };
   /** Serializes budget mutations so concurrent requests don't double-lease. */
   private budgetChain: Promise<unknown> = Promise.resolve();
+  /** Latest limit snapshot from the account (for RateLimit headers + quota push). */
+  private rate: RateSnapshot | null = null;
+  /** Last quota level pushed to the client — only re-push on change. */
+  private lastQuotaLevel: string | null = null;
 
   private accountStub(slug?: string): DurableObjectStub | null {
     const s = slug ?? this.ctlAttach()?.slug;
@@ -146,6 +152,45 @@ export class TunnelDO extends DurableObject<Env> {
     return r;
   }
 
+  /** Record the latest account snapshot and, on a level change, push a `quota`
+   *  frame to the client so the CLI/gateway can warn before the hard cutoff. */
+  private applyRate(rate: RateSnapshot | undefined): void {
+    if (!rate) return;
+    this.rate = rate;
+    if (rate.level !== this.lastQuotaLevel) {
+      this.lastQuotaLevel = rate.level;
+      const ctl = this.ctl();
+      if (ctl) {
+        try {
+          ctl.send(JSON.stringify({ type: 'quota', level: rate.level, day: rate.day, month: rate.month }));
+        } catch {
+          /* control gone */
+        }
+      }
+    }
+  }
+
+  /** IETF RateLimit-* headers (draft-ietf-httpapi-ratelimit-headers) for the
+   *  binding daily window. `reset` is seconds until refill. */
+  private rateHeaders(): Record<string, string> {
+    if (!this.rate) return {};
+    const nowSec = Math.floor(Date.now() / 1000);
+    return {
+      'ratelimit-limit': String(this.rate.day.limit),
+      'ratelimit-remaining': String(Math.max(0, this.rate.day.remaining)),
+      'ratelimit-reset': String(Math.max(1, this.rate.day.reset - nowSec)),
+    };
+  }
+
+  /** Seconds until the binding window refills — for Retry-After on a 429. */
+  private retryAfterSeconds(): number {
+    if (!this.rate) return 60;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const dayOut = this.rate.day.remaining <= 0;
+    const reset = dayOut ? this.rate.day.reset : this.rate.month.reset;
+    return Math.max(1, reset - nowSec);
+  }
+
   /**
    * Pre-authorize `cost` credits before relaying. Spends from the local lease;
    * tops the lease up from the account when short. Returns false (→ 429) when the
@@ -161,13 +206,14 @@ export class TunnelDO extends DurableObject<Env> {
       }
       const tunnelId = this.ctlAttach()?.tunnelId ?? '';
       const want = Math.max(this.ctlAttach()?.leaseChunk ?? 50, cost);
-      const res = await this.accountRpc<{ grant: number }>('/lease', {
+      const res = await this.accountRpc<LeaseResult>('/lease', {
         tunnelId,
         want,
         commit: this.consumedSinceCommit,
         raw: this.takeRaw(),
       });
       this.consumedSinceCommit = 0;
+      this.applyRate(res?.rate);
       this.budget += res?.grant ?? 0;
       if (this.budget >= cost) {
         this.budget -= cost;
@@ -263,11 +309,21 @@ export class TunnelDO extends DurableObject<Env> {
     this.rawSinceFlush.requests = (this.rawSinceFlush.requests ?? 0) + 1;
     this.rawSinceFlush.bytes = (this.rawSinceFlush.bytes ?? 0) + (bodyBytes?.length ?? 0);
     if (!(await this.ensureBudget(CREDIT_WEIGHTS.request))) {
-      return new Response('Account quota exceeded', {
-        status: 429,
-        headers: corsHeaders(request),
-      });
+      const retry = this.retryAfterSeconds();
+      const scope = this.rate && this.rate.day.remaining <= 0 ? 'day' : 'month';
+      return Response.json(
+        { error: 'quota_exceeded', scope, retryAfter: retry },
+        {
+          status: 429,
+          headers: {
+            ...corsHeaders(request),
+            ...this.rateHeaders(),
+            'retry-after': String(retry),
+          },
+        }
+      );
     }
+    const rateHeaders = this.rateHeaders();
 
     const reqId = crypto.randomUUID();
     return await new Promise<Response>((resolve) => {
@@ -276,7 +332,7 @@ export class TunnelDO extends DurableObject<Env> {
         this.streaming.delete(reqId);
         resolve(new Response('Tunnel timeout', { status: 504, headers: corsHeaders(request) }));
       }, 30000);
-      this.pendingHttp.set(reqId, { resolve, timer, request, bootstrapCookie });
+      this.pendingHttp.set(reqId, { resolve, timer, request, bootstrapCookie, rate: rateHeaders });
       try {
         ctl.send(
           JSON.stringify({
@@ -311,7 +367,10 @@ export class TunnelDO extends DurableObject<Env> {
     // Meter + hard-cutoff (one charge per upgrade; relayed frames are not priced).
     this.rawSinceFlush.wsUpgrades = (this.rawSinceFlush.wsUpgrades ?? 0) + 1;
     if (!(await this.ensureBudget(CREDIT_WEIGHTS.wsUpgrade))) {
-      return new Response('Account quota exceeded', { status: 429 });
+      return new Response('Account quota exceeded', {
+        status: 429,
+        headers: { ...this.rateHeaders(), 'retry-after': String(this.retryAfterSeconds()) },
+      });
     }
 
     const connId = crypto.randomUUID();
@@ -544,8 +603,19 @@ export class TunnelDO extends DurableObject<Env> {
         leaseChunk: auth.leaseChunk ?? 50,
         openedAt: Date.now(),
       } satisfies CtlAttach);
+      // Seed the rate snapshot + quota level so headers work from the first
+      // request and we don't re-announce the level the client already sees.
+      this.rate = auth.rate ?? null;
+      this.lastQuotaLevel = auth.rate?.level ?? null;
       const url = `https://${tunnelId}.${this.env.TUNNEL_DOMAIN}`;
-      ws.send(JSON.stringify({ type: 'registered', tunnelId, url }));
+      ws.send(
+        JSON.stringify({
+          type: 'registered',
+          tunnelId,
+          url,
+          account: auth.rate ? { slug, day: auth.rate.day, month: auth.rate.month, level: auth.rate.level } : undefined,
+        })
+      );
       return;
     }
 
@@ -559,6 +629,7 @@ export class TunnelDO extends DurableObject<Env> {
         pending.request,
         pending.bootstrapCookie
       );
+      for (const [k, v] of Object.entries(pending.rate)) headers.set(k, v);
       const body = msg.body ? b64decode(msg.body as string) : null;
       pending.resolve(new Response(body, { status: (msg.status as number) || 200, headers }));
       return;
@@ -575,6 +646,7 @@ export class TunnelDO extends DurableObject<Env> {
         pending.request,
         pending.bootstrapCookie
       );
+      for (const [k, v] of Object.entries(pending.rate)) headers.set(k, v);
       const self = this;
       const readable = new ReadableStream<Uint8Array>({
         start(controller) {

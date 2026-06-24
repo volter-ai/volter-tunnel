@@ -70,17 +70,38 @@ function admin(
 }
 
 function reqViaTunnel(port: number, tunnelId: string, path: string): Promise<number> {
+  return reqFull(port, tunnelId, path).then((r) => r.status);
+}
+
+function reqFull(
+  port: number,
+  tunnelId: string,
+  path: string
+): Promise<{ status: number; headers: Record<string, string | string[] | undefined> }> {
   return new Promise((resolve, reject) => {
     const r = http.request(
       { host: '127.0.0.1', port, path, method: 'GET', headers: { Host: `${tunnelId}.${DOMAIN}` } },
       (res) => {
         res.on('data', () => {});
-        res.on('end', () => resolve(res.statusCode ?? 0));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers }));
       }
     );
     r.on('error', reject);
     r.end();
   });
+}
+
+/** Fire a tunnel request without awaiting its response (used to drive metering). */
+function fireAndForget(port: number, tunnelId: string, path: string): void {
+  const r = http.request({
+    host: '127.0.0.1',
+    port,
+    path,
+    method: 'GET',
+    headers: { Host: `${tunnelId}.${DOMAIN}` },
+  });
+  r.on('error', () => {});
+  r.end();
 }
 
 /** Raw control register — resolves {ok:true} on `registered`, else {ok:false,code}. */
@@ -120,6 +141,8 @@ let acmeApi: string;
 let acmeService: string;
 let capApi: string;
 let capService: string;
+let hdrApi: string;
+let pushApi: string;
 
 beforeAll(async () => {
   // Hermetic start: DO storage persists in .wrangler/state across runs, which
@@ -182,6 +205,33 @@ beforeAll(async () => {
   capService = cap.json.serviceToken as string;
   capApi = (await admin(port, 'POST', '/admin/accounts/cap/tokens', capService, { kind: 'api', label: 't' }))
     .json.token as string;
+
+  // hdr: roomy account for asserting RateLimit-* headers on a 200.
+  const hdr = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
+    slug: 'hdr',
+    name: 'Hdr',
+    dayLimit: 50,
+    monthLimit: 1000,
+    leaseChunk: 10,
+    concurrentMax: 5,
+  });
+  hdrApi = (await admin(port, 'POST', '/admin/accounts/hdr/tokens', hdr.json.serviceToken as string, {
+    kind: 'api',
+  })).json.token as string;
+
+  // push: tiny daily cap so usage crosses warn(≥80%) then exceeded for the
+  // control-plane quota-push test.
+  const push = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
+    slug: 'push',
+    name: 'Push',
+    dayLimit: 5,
+    monthLimit: 100,
+    leaseChunk: 1,
+    concurrentMax: 5,
+  });
+  pushApi = (await admin(port, 'POST', '/admin/accounts/push/tokens', push.json.serviceToken as string, {
+    kind: 'api',
+  })).json.token as string;
 }, 90000);
 
 afterAll(async () => {
@@ -226,19 +276,19 @@ describe('global ceiling invariant', () => {
   });
 
   test('cumulative allocation is enforced across accounts', async () => {
-    // allocated so far ≈ acme(5)+cap(1000)=1005; global day = 2000.
+    // allocated so far = acme(5)+cap(1000)+hdr(50)+push(5) = 1060; global day = 2000.
     const beta = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
       slug: 'beta',
       dayLimit: 900,
       monthLimit: 1,
     });
-    expect(beta.status).toBe(201); // 1005+900=1905 ≤ 2000
+    expect(beta.status).toBe(201); // 1060+900=1960 ≤ 2000
     const gamma = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
       slug: 'gamma',
       dayLimit: 900,
       monthLimit: 1,
     });
-    expect(gamma.status).toBe(409); // 1905+900 = 2805 > 2000
+    expect(gamma.status).toBe(409); // 1960+900 = 2860 > 2000
   });
 });
 
@@ -268,12 +318,17 @@ describe('hard daily credit cutoff', () => {
     expect(tunnel.url).toBe('https://acme-t1.tunnel.test');
   });
 
-  test('exactly dayLimit requests succeed, then 429', async () => {
-    const statuses: number[] = [];
-    for (let i = 0; i < 7; i++) statuses.push(await reqViaTunnel(port, 'acme-t1', '/hello'));
-    expect(statuses.slice(0, 5)).toEqual([200, 200, 200, 200, 200]);
-    expect(statuses[5]).toBe(429);
-    expect(statuses[6]).toBe(429);
+  test('exactly dayLimit requests succeed, then 429 with Retry-After', async () => {
+    const results = [];
+    for (let i = 0; i < 7; i++) results.push(await reqFull(port, 'acme-t1', '/hello'));
+    expect(results.slice(0, 5).map((r) => r.status)).toEqual([200, 200, 200, 200, 200]);
+    expect(results[5]!.status).toBe(429);
+    expect(results[6]!.status).toBe(429);
+    // The 429 surfaces standard retry/limit headers.
+    const over = results[6]!.headers;
+    expect(Number(over['retry-after'])).toBeGreaterThan(0);
+    expect(over['ratelimit-remaining']).toBe('0');
+    expect(over['ratelimit-limit']).toBe('5');
   }, 20000);
 
   test('usage view reports the account drained', async () => {
@@ -295,6 +350,109 @@ describe('hard daily credit cutoff', () => {
     expect(res.ok).toBe(false);
     expect(res.code).toBe(4029);
   }, 12000);
+});
+
+describe('limit surfacing (headers + control plane)', () => {
+  let hdrTunnel: TunnelHandle;
+
+  beforeAll(async () => {
+    hdrTunnel = await createTunnel({
+      port: originPort,
+      host: `http://127.0.0.1:${port}`,
+      tunnelId: 'hdr-t',
+      secret: hdrApi,
+      authRequired: false,
+      logger: NO_LOG,
+    });
+  }, 15000);
+
+  afterAll(() => {
+    try {
+      hdrTunnel?.close();
+    } catch {
+      /* ignore */
+    }
+  });
+
+  test('a 200 response carries standard RateLimit-* headers', async () => {
+    const r = await reqFull(port, 'hdr-t', '/hello');
+    expect(r.status).toBe(200);
+    expect(r.headers['ratelimit-limit']).toBe('50');
+    expect(Number(r.headers['ratelimit-remaining'])).toBeGreaterThanOrEqual(0);
+    expect(Number(r.headers['ratelimit-remaining'])).toBeLessThanOrEqual(50);
+    expect(Number(r.headers['ratelimit-reset'])).toBeGreaterThan(0);
+  });
+
+  test('the registered message includes the account snapshot', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?id=hdr-reg`);
+    const account = await new Promise<{ slug: string; day: { limit: number }; level: string }>(
+      (resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('no registered reply')), 8000);
+        ws.on('open', () =>
+          ws.send(JSON.stringify({ type: 'register', tunnelId: 'hdr-reg', secret: hdrApi, authRequired: false }))
+        );
+        ws.on('message', (m) => {
+          const msg = JSON.parse(m.toString());
+          if (msg.type === 'registered') {
+            clearTimeout(timer);
+            resolve(msg.account);
+          }
+        });
+        ws.on('error', reject);
+      }
+    );
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(account?.slug).toBe('hdr');
+    expect(account?.day.limit).toBe(50);
+    expect(account?.level).toBe('ok');
+  }, 12000);
+
+  test('crossing thresholds pushes quota frames (warn → exceeded) to the control client', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?id=push-t`);
+    const levels: string[] = [];
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 9000);
+      ws.on('open', () =>
+        ws.send(JSON.stringify({ type: 'register', tunnelId: 'push-t', secret: pushApi, authRequired: false }))
+      );
+      ws.on('message', (m) => {
+        const msg = JSON.parse(m.toString());
+        if (msg.type === 'registered') {
+          // Drive past 80% then 100% of the day limit (5) to trigger pushes.
+          for (let i = 0; i < 7; i++) fireAndForget(port, 'push-t', '/hello');
+        } else if (msg.type === 'request') {
+          // Act as the origin so the relayed requests complete promptly.
+          ws.send(
+            JSON.stringify({
+              type: 'response',
+              reqId: msg.reqId,
+              status: 200,
+              headers: {},
+              body: Buffer.from('ok').toString('base64'),
+            })
+          );
+        } else if (msg.type === 'quota') {
+          levels.push(msg.level);
+          if (levels.includes('exceeded')) {
+            clearTimeout(timer);
+            resolve();
+          }
+        }
+      });
+      ws.on('error', () => {});
+    });
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(levels).toContain('warn');
+    expect(levels).toContain('exceeded');
+  }, 15000);
 });
 
 describe('concurrent-tunnel cap', () => {

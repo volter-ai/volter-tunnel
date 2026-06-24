@@ -65,6 +65,21 @@ export interface UsageView {
   resetAt: { day: string; month: string };
 }
 
+/** One limit window. `reset` is the UTC epoch-seconds at which it refills. */
+export interface RateWindow {
+  limit: number;
+  remaining: number;
+  reset: number;
+}
+
+/** A point-in-time rate snapshot, surfaced on the data + control planes. */
+export interface RateSnapshot {
+  day: RateWindow;
+  month: RateWindow;
+  /** 'ok' (<80%), 'warn' (≥80%), 'exceeded' (no budget left). */
+  level: 'ok' | 'warn' | 'exceeded';
+}
+
 /** Result of an authorize() call from a TunnelDO at register time. */
 export interface AuthorizeResult {
   ok: boolean;
@@ -72,6 +87,14 @@ export interface AuthorizeResult {
   reason?: string;
   slug?: string;
   leaseChunk?: number;
+  rate?: RateSnapshot;
+}
+
+/** Result of a lease() call. */
+export interface LeaseResult {
+  grant: number;
+  over: boolean;
+  rate: RateSnapshot;
 }
 
 /** Read a numeric env var with a fallback. */

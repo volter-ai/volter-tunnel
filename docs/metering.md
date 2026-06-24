@@ -77,6 +77,26 @@ mgmt client ─/admin/*─▶ RegistryDO (singleton)         data plane
    global budget — no runtime cross-account metering needed. (Cloudflare has no
    hard dollar cap, so these credits *are* the spend cap.)
 
+## How limits are surfaced
+
+Three layers, the idiomatic split (standard HTTP rate-limit signalling + an
+agent-side warning channel + a management snapshot):
+
+1. **Data plane — standard headers.** Every tunneled response carries the IETF
+   `RateLimit-Limit` / `RateLimit-Remaining` / `RateLimit-Reset` headers (binding
+   daily window; `reset` is seconds-to-refill). The hard cutoff is a **`429`** with
+   `Retry-After` and a JSON body `{ error:'quota_exceeded', scope, retryAfter }`.
+   WS-upgrade 429s carry `Retry-After` too.
+2. **Control plane — pushed to the tunnel client.** The `registered` frame includes
+   an `account` snapshot (`{ slug, day, month, level }`) so the CLI/gateway can show
+   usage at startup. As usage crosses thresholds the relay pushes a **`quota`** frame
+   (`level: 'warn'` at ≥80%, `'exceeded'` at 100%, `'ok'` on recovery) — only on
+   level change. The `@volter/tunnel` client logs these (`info` for ok, `warn`
+   otherwise); gateways can relay them to a UI. Hard rejections still close the
+   control socket with `4029` + reason.
+3. **Management plane.** `GET /admin/accounts/:slug/usage` for the live snapshot;
+   future: dashboard panel + threshold alerts/webhooks + Analytics Engine graphs.
+
 ## Resets
 
 `AccountDO` lazily rolls the day/month buckets when the wall clock crosses a UTC
