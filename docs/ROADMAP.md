@@ -28,12 +28,15 @@ Last updated: 2026-06-24.
 Also fixed a routing-collision bug: management paths (`/admin`, `/signup`,
 `/report`) are matched on the apex only; tunnel subdomains forward every path.
 
+Also done (Phase 2): **#10** inspector replay + persisted history
+(`INSPECT_REPLAY`, off by default; DO-storage cost is the paid driver).
+
 Remaining — all **Phase 2** (paid / infra / decisions):
-- **#10** inspector replay w/ persisted history (builds on #5; DO storage)
-- **#11** higher/unlimited bandwidth tiers (raise #4 caps)
+- **#11** higher bandwidth tiers & **#14** more concurrent tunnels — already
+  mechanically supported (per-account `dayLimit`/`monthLimit`/`concurrentMax`
+  are patchable via the admin API); only the pricing/packaging layer is left.
 - **#12** BYO custom hostname (needs CF-for-SaaS zone)
 - **#13** TCP/UDP tunnels (needs off-Cloudflare compute)
-- **#14** more concurrent tunnels beyond free cap (raise `concurrentMax`)
 - **#6 OAuth-gating variant** — end-user OAuth in front of a tunnel (basic-auth
   form shipped); can reuse the #2 GitHub plumbing.
 
