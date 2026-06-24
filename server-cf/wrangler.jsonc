@@ -10,15 +10,17 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TunnelDO"] }],
 
-  // Public base domain for tunnel URLs. Override per-env / via `--var` in tests.
-  "vars": { "TUNNEL_DOMAIN": "vgit-tunnels.volterapp.com" },
+  // Public base domain for tunnel URLs. Tunnel URLs are {tunnelId}.<this>.
+  // Use a 1-level wildcard zone so free Universal SSL covers *.<domain>.
+  // Override per-env / via `--var` in tests.
+  "vars": { "TUNNEL_DOMAIN": "voltertest.xyz" },
 
-  // workers_dev gives <name>.<acct>.workers.dev for early testing. The wildcard
-  // route below is added at cutover, once the zone is on Cloudflare.
-  "workers_dev": true
-  // "routes": [
-  //   { "pattern": "*.vgit-tunnels.volterapp.com/*", "zone_name": "vgit-tunnels.volterapp.com" }
-  // ]
+  // workers_dev keeps <name>.<acct>.workers.dev available for the control channel
+  // (clients connect to <host>/ws?id=...). The wildcard route serves tunnel data.
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "*.voltertest.xyz/*", "zone_name": "voltertest.xyz" }
+  ]
 
   // Secrets (set via `wrangler secret put` in prod, `.dev.vars` locally):
   //   TUNNEL_SECRET, JWT_SECRET
