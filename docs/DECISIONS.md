@@ -171,14 +171,24 @@ friendly behavior originally pitched).
 
 ---
 
-## D6. Open policy decisions (need values)
+## D6. Policy defaults (decided; live in `wrangler.jsonc`)
 
-- **Idle-reclaim TTL** — 30 / 60 / 90 days idle before reclaimable-on-contention.
-  *Implemented* as env `RESERVATION_IDLE_TTL_DAYS`, **default 60**; confirm the
-  final policy value.
-- **Free-tier reserved-ID count per account** — Wormhole uses 3.
-- **Free-tier monthly bandwidth/active-duration cap.**
-- **Inspector replay retention** — free-preview window vs paid days + max size.
+Reasonable defaults are set and deployed; tune any via env without code changes.
+
+| Knob | Default | Meaning |
+|---|---|---|
+| `RESERVATION_IDLE_TTL_DAYS` | 60 | idle days before a reserved id is reclaimable-on-contention |
+| `DEFAULT_RESERVED_MAX` | 3 | reserved tunnel ids per free account (matches Wormhole) |
+| `SIGNUP_DAY_LIMIT` / `SIGNUP_MONTH_LIMIT` | 1,000,000 / 10,000,000 | free-tier spend cap ≈ $1/day, $10/month (op-credits) |
+| `BURST_RPS` / `BURST_SIZE` | 50 / 500 | per-tunnel fair-use: 50 req/s sustained, 500 burst (floods only) |
+| `SIGNUP_RPS` | 5 | rate limit on the unauthenticated public surface (signup/report) |
+| `GLOBAL_DAY_LIMIT` / `GLOBAL_MONTH_LIMIT` | 1e9 / 1e10 | Σ(account) ceiling ≈ $1,000/day, $10,000/month — total spend cap |
+| `INSPECT_REPLAY` | off | persisted inspector history + replay (paid feature; DO-storage cost) |
+| `JWT_SECRET` | unset | end-user JWT layer off — keeps tunnels publicly shareable (inspector is independently owner-gated) |
+| `SIGNUP_ALLOWED_USERS` | set (waitlist) | only listed GitHub logins may sign up |
+
+Revisit when productizing paid tiers (raise per-account limits via the admin API)
+or opening signup to the public (widen / clear `SIGNUP_ALLOWED_USERS`).
 
 ---
 

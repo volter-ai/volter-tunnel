@@ -56,8 +56,11 @@
     "DEFAULT_RESERVED_MAX": "3", //  reserved tunnel ids per free account
     "RESERVATION_IDLE_TTL_DAYS": "60", //  idle days before a reserved id is reclaimable
 
-    // ── Fair-use request burst (#4): 0 = off. e.g. "20" = 20 req/s/tunnel.
-    "BURST_RPS": "0",
+    // ── Fair-use request burst (#4). Generous defaults: 50 req/s/tunnel sustained,
+    // 500 instantaneous (covers heavy page loads / interactive dev), so only real
+    // floods are throttled. The daily/monthly credit caps remain the primary limit.
+    "BURST_RPS": "50",
+    "BURST_SIZE": "500",
 
     // ── Cost-DoS guard on the unauthenticated public surface (/signup/*, /report).
     "SIGNUP_RPS": "5"
