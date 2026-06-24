@@ -70,6 +70,10 @@ export class AccountDO extends DurableObject<MeteringEnv> {
   private usage!: Usage;
   /** tunnelId → open-tunnel ledger entry. */
   private open = new Map<string, OpenEntry>();
+  /** Distinct tunnelIds this account holds reserved — persists across disconnects
+   *  (unlike `open`), capped by config.reservedMax (#3). Released only when another
+   *  account reclaims an idle id. */
+  private reserved = new Set<string>();
   private loaded: Promise<void>;
 
   constructor(ctx: DurableObjectState, env: MeteringEnv) {
@@ -86,6 +90,7 @@ export class AccountDO extends DurableObject<MeteringEnv> {
           typeof v === 'number' ? { lease: v, regId: '', seen: 0 } : v,
         ])
       );
+      this.reserved = new Set((await ctx.storage.get<string[]>('reserved')) ?? []);
     });
   }
 
@@ -95,6 +100,9 @@ export class AccountDO extends DurableObject<MeteringEnv> {
   }
   private async persistOpen(): Promise<void> {
     await this.ctx.storage.put('open', Object.fromEntries(this.open));
+  }
+  private async persistReserved(): Promise<void> {
+    await this.ctx.storage.put('reserved', [...this.reserved]);
   }
 
   /** Reclaim open entries whose owner went silent (TunnelDO vanished without a
@@ -220,6 +228,7 @@ export class AccountDO extends DurableObject<MeteringEnv> {
       monthLimit: envNum(this.env.INTERNAL_MONTH_LIMIT, 100_000_000),
       concurrentMax: envNum(this.env.INTERNAL_CONCURRENT, 1000),
       leaseChunk: envNum(this.env.DEFAULT_LEASE_CHUNK, 50),
+      reservedMax: envNum(this.env.INTERNAL_RESERVED_MAX, 1_000_000),
     };
     await this.ctx.storage.put('config', this.config);
     try {
@@ -255,6 +264,8 @@ export class AccountDO extends DurableObject<MeteringEnv> {
         return Response.json(await this.lease(body));
       case '/close':
         return Response.json(await this.close(body));
+      case '/release-id':
+        return Response.json(await this.releaseId(body));
       case '/configure':
         return Response.json(await this.configure(body));
       case '/usage':
@@ -290,10 +301,22 @@ export class AccountDO extends DurableObject<MeteringEnv> {
       return { ok: false, reason: 'overQuota' };
     }
 
+    // Reserved-id count cap (#3): a NEW reserved id must fit under reservedMax.
+    // Refreshing an id the account already holds is free; the internal account's
+    // very large reservedMax makes it effectively unlimited.
+    const reservedMax = this.config.reservedMax ?? envNum(this.env.DEFAULT_RESERVED_MAX, 3);
+    if (reservedMax > 0 && !this.reserved.has(tunnelId) && this.reserved.size >= reservedMax) {
+      return { ok: false, reason: 'reservationCap' };
+    }
+
     // Create the entry, or take it over on replace (keep the outstanding lease,
     // swap in the new owner's regId so the old socket's close becomes a no-op).
     this.open.set(tunnelId, { lease: existing?.lease ?? 0, regId, seen: nowMs });
     await this.persistOpen();
+    if (!this.reserved.has(tunnelId)) {
+      this.reserved.add(tunnelId);
+      await this.persistReserved();
+    }
     return { ok: true, slug: this.config.slug, leaseChunk: this.config.leaseChunk, rate: this.snapshot() };
   }
 
@@ -365,6 +388,14 @@ export class AccountDO extends DurableObject<MeteringEnv> {
     await this.persistOpen();
     await this.persistUsage();
     this.recordAE();
+    return { ok: true };
+  }
+
+  /** Drop a reserved id — called by a TunnelDO when another account reclaims an
+   *  idle id (#1/#3), so the previous owner's reserved count frees up. */
+  private async releaseId(body: Record<string, unknown>): Promise<{ ok: true }> {
+    const tunnelId = String(body.tunnelId ?? '');
+    if (this.reserved.delete(tunnelId)) await this.persistReserved();
     return { ok: true };
   }
 

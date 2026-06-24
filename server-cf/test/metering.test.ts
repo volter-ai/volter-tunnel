@@ -149,6 +149,7 @@ let sharedApi: string;
 let revApi: string;
 let revService: string;
 let wscapApi: string;
+let rezcapApi: string;
 let dollarsService: string;
 let dollarsAccount: { dayLimit: number; monthLimit: number };
 
@@ -186,6 +187,7 @@ beforeAll(async () => {
       GLOBAL_MONTH_LIMIT: '200000',
       DEFAULT_CONCURRENT: '100',
       DEFAULT_LEASE_CHUNK: '50',
+      DEFAULT_RESERVED_MAX: '50', // high default so multi-id test accounts aren't capped
     },
     experimental: { disableExperimentalWarning: true },
   });
@@ -308,6 +310,21 @@ beforeAll(async () => {
   });
   dollarsService = dollars.json.serviceToken as string;
   dollarsAccount = dollars.json.account as { dayLimit: number; monthLimit: number };
+
+  // rezcap: reservedMax 2, for the reserved-id count cap test (#3).
+  const rezcap = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
+    slug: 'rezcap',
+    name: 'Rezcap',
+    dayLimit: 20,
+    monthLimit: 100,
+    reservedMax: 2,
+  });
+  rezcapApi = (
+    await admin(port, 'POST', '/admin/accounts/rezcap/tokens', rezcap.json.serviceToken as string, {
+      kind: 'api',
+      label: 't',
+    })
+  ).json.token as string;
 }, 90000);
 
 afterAll(async () => {
@@ -884,4 +901,150 @@ describe('legacy shared secret still works (internal account)', () => {
     }
     expect(res.ok).toBe(true);
   }, 12000);
+});
+
+describe('reserved-id ownership (idle reclaim-on-contention, DECISIONS D5)', () => {
+  // `cap` owns the id; `hdr` is a different account that contends for it. The
+  // contender is refused at the reservation check (before authorize), so neither
+  // account's budget matters here — only ownership.
+  test('a reserved tunnelId is refused to a different account while the owner is active', async () => {
+    const owner = rawRegister(port, 'rez-stable', capApi);
+    expect((await owner.result).ok).toBe(true);
+    // Owner disconnects — the id must STAY reserved (this is the whole feature).
+    try {
+      owner.ws.close();
+    } catch {
+      /* ignore */
+    }
+
+    const contender = rawRegister(port, 'rez-stable', hdrApi);
+    const res = await contender.result;
+    try {
+      contender.ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe(4002); // "Tunnel ID reserved"
+  }, 15000);
+
+  test('the owning account keeps (refreshes) its own reserved id on reconnect', async () => {
+    const again = rawRegister(port, 'rez-stable', capApi);
+    const res = await again.result;
+    try {
+      again.ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(res.ok).toBe(true);
+  }, 15000);
+});
+
+describe('reserved-id count cap (#3)', () => {
+  // `rezcap` has reservedMax 2. Reservations persist across disconnect, so two
+  // distinct ids fill the cap even after their tunnels close.
+  test('an account cannot reserve more distinct ids than its reservedMax', async () => {
+    const a = rawRegister(port, 'rezcap-a', rezcapApi);
+    expect((await a.result).ok).toBe(true);
+    try {
+      a.ws.close();
+    } catch {
+      /* ignore */
+    }
+
+    const b = rawRegister(port, 'rezcap-b', rezcapApi);
+    expect((await b.result).ok).toBe(true);
+    try {
+      b.ws.close();
+    } catch {
+      /* ignore */
+    }
+
+    // Third distinct id exceeds the cap → rejected.
+    const c = rawRegister(port, 'rezcap-c', rezcapApi);
+    const res = await c.result;
+    try {
+      c.ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe(4029);
+  }, 15000);
+
+  test('re-registering an already-held id is free (does not count against the cap)', async () => {
+    const again = rawRegister(port, 'rezcap-a', rezcapApi);
+    const res = await again.result;
+    try {
+      again.ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(res.ok).toBe(true);
+  }, 15000);
+});
+
+describe('handle revocation (#3)', () => {
+  test('root can revoke a reserved handle, freeing it for another account', async () => {
+    // cap reserves it, disconnects — the id stays reserved to cap.
+    const owner = rawRegister(port, 'revoke-me', capApi);
+    expect((await owner.result).ok).toBe(true);
+    try {
+      owner.ws.close();
+    } catch {
+      /* ignore */
+    }
+
+    // A different account is refused while cap owns it.
+    const before = rawRegister(port, 'revoke-me', hdrApi);
+    expect((await before.result).code).toBe(4002);
+    try {
+      before.ws.close();
+    } catch {
+      /* ignore */
+    }
+
+    // Root revokes the handle.
+    const revoke = await admin(port, 'DELETE', '/admin/reservations/revoke-me', ROOT_TOKEN);
+    expect(revoke.status).toBe(200);
+    expect(revoke.json.revoked).toBe(true);
+
+    // Now the other account can take it.
+    const after = rawRegister(port, 'revoke-me', hdrApi);
+    const res = await after.result;
+    try {
+      after.ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(res.ok).toBe(true);
+  }, 20000);
+
+  test('a non-root caller cannot revoke (403)', async () => {
+    const r = await admin(port, 'DELETE', '/admin/reservations/anything', acmeService);
+    expect(r.status).toBe(403);
+  });
+});
+
+describe('abuse reports (#3)', () => {
+  test('anyone can file a report; root can review them', async () => {
+    const filed = await admin(port, 'POST', '/report', null, { tunnelId: 'phishy', reason: 'phishing' });
+    expect(filed.status).toBe(200);
+    expect(filed.json.ok).toBe(true);
+
+    const list = await admin(port, 'GET', '/admin/reports', ROOT_TOKEN);
+    expect(list.status).toBe(200);
+    const reports = list.json.reports as Array<{ tunnelId: string; reason: string }>;
+    expect(reports.some((r) => r.tunnelId === 'phishy' && r.reason === 'phishing')).toBe(true);
+  });
+
+  test('a report without a tunnelId is rejected (400)', async () => {
+    const r = await admin(port, 'POST', '/report', null, { reason: 'no target' });
+    expect(r.status).toBe(400);
+  });
+
+  test('reviewing reports requires root (403)', async () => {
+    const r = await admin(port, 'GET', '/admin/reports', acmeService);
+    expect(r.status).toBe(403);
+  });
 });
