@@ -27,6 +27,10 @@ export interface MeteringEnv {
   DEFAULT_CONCURRENT?: string;
   /** Default lease chunk (credits handed to a tunnel per top-up). */
   DEFAULT_LEASE_CHUNK?: string;
+  /** Default reserved-id cap for new accounts (#3). Default 3. */
+  DEFAULT_RESERVED_MAX?: string;
+  /** Reserved-id cap for the privileged internal account (effectively unlimited). */
+  INTERNAL_RESERVED_MAX?: string;
 
   /** Optional Analytics Engine dataset for durable per-account usage time-series.
    *  Absent in local/test → rollups are skipped (best-effort). */
@@ -43,6 +47,9 @@ export interface AccountConfig {
   concurrentMax: number;
   /** Credits granted per lease top-up. Smaller = tighter overshoot bound. */
   leaseChunk: number;
+  /** Max distinct tunnelIds this account may hold reserved at once (#3). Optional
+   *  for back-compat with configs written before this field; callers default it. */
+  reservedMax?: number;
 }
 
 /** Token metadata as stored in the registry (never the plaintext). */
