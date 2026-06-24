@@ -126,10 +126,14 @@ export const CREDIT_WEIGHTS: CreditWeights = {
 };
 
 /**
- * Conservative estimate of the Cloudflare cost of one op (a DO request +
- * sometimes a Worker request + a slice of DO duration), in USD. Real DO/Worker
- * request prices are ~$0.15–0.45 per million; $1/million here leaves margin for
- * duration. Tune as real invoices land — it's the only money↔ops knob.
+ * Conservative estimate of the Cloudflare cost of one op, in USD. An op bills
+ * roughly: 1 Worker request + 1–2 DO requests + a slice of DO active duration,
+ * plus amortized unmetered overhead (the AccountDO lease/authorize/close RPCs,
+ * and billed-but-free paths like OPTIONS/502/429). Real Worker+DO request prices
+ * are ~$0.15–0.45/M, so $1/M carries ~2–3× headroom over the direct request cost
+ * to absorb that overhead. This is the ONLY money↔ops knob — RAISE it (and the
+ * dollar caps stay honest, op-limits auto-shrink) once a real CF invoice lets you
+ * calibrate; lower it only if you're confident it over-charges.
  */
 export const COST_PER_OP_USD = 0.000001;
 

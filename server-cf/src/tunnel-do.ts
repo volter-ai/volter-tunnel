@@ -233,7 +233,23 @@ export class TunnelDO extends DurableObject<Env> {
     return run;
   }
 
-  /** Charge the batch of relayed messages accrued since the last flush. On
+  /** Charge one relayed-message op. Fast path: spend from the locally-held lease
+   *  synchronously (no await, atomic in the single-threaded DO). Slow path (local
+   *  budget exhausted): await a top-up from the account. Returns false when the
+   *  account is out of budget — the caller must then cut the traffic off. This is
+   *  the synchronous gate the floodable browser-frame path needs so it can never
+   *  relay unmetered while an async charge is in flight. */
+  private async chargeMessage(): Promise<boolean> {
+    const cost = CREDIT_WEIGHTS.message;
+    if (this.budget >= cost) {
+      this.budget -= cost;
+      this.consumedSinceCommit += cost;
+      return true;
+    }
+    return this.ensureBudget(cost);
+  }
+
+  /** Charge the batch of relayed CONTROL messages accrued since the last flush. On
    *  exhaustion, cut the chatty traffic off by closing the browser sockets
    *  (the control socket stays so the client can re-auth after the reset). */
   private async flushMessages(): Promise<void> {
@@ -434,28 +450,54 @@ export class TunnelDO extends DurableObject<Env> {
 
   // ── hibernation handlers ──────────────────────────────────────────────────
   async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer): Promise<void> {
-    // Every relayed message (response chunk / WS frame) is a billable op. Count
-    // it and charge in batches — fire-and-forget so the lease round-trip never
-    // blocks message relay (which would convoy under concurrency). The cap still
-    // holds: charging + cutoff happen a beat later, overshoot bounded by a batch.
-    this.msgsSinceFlush++;
-    if (this.msgsSinceFlush >= MSG_FLUSH_EVERY) void this.flushMessages().catch(() => {});
-
     const attach = ws.deserializeAttachment() as CtlAttach | BrowserAttach | null;
 
-    // Raw browser frame → forward to control as ws-message.
+    // Raw browser frame → the untrusted, floodable direction. Meter it
+    // SYNCHRONOUSLY (gate per frame on locally-held budget; only await a top-up
+    // when exhausted) so an over-quota flood is cut off (1011) within a bounded
+    // overshoot instead of being relayed unmetered while an async charge lands.
     if (attach?.role === 'browser') {
       const ctl = this.ctl();
       if (!ctl) return;
+      if (!(await this.chargeMessage())) {
+        try {
+          ws.close(1011, 'Account quota exceeded');
+        } catch {
+          /* already gone */
+        }
+        return;
+      }
       const binary = typeof data !== 'string';
-      const bytes = binary ? new Uint8Array(data as ArrayBuffer) : new TextEncoder().encode(data as string);
-      ctl.send(
-        JSON.stringify({ type: 'ws-message', connId: attach.connId, data: b64encode(bytes), binary })
-      );
+      const bytes = binary
+        ? new Uint8Array(data as ArrayBuffer)
+        : new TextEncoder().encode(data as string);
+      // A DO WS frame is capped at 1 MiB and base64 inflates ~33%; an oversized
+      // browser frame would throw on ctl.send and escape the hibernation handler.
+      if (bytes.length > 750_000) {
+        try {
+          ws.close(1009, 'frame too large to tunnel');
+        } catch {
+          /* already gone */
+        }
+        return;
+      }
+      try {
+        ctl.send(JSON.stringify({ type: 'ws-message', connId: attach.connId, data: b64encode(bytes), binary }));
+      } catch {
+        try {
+          ws.close(1011, 'relay error');
+        } catch {
+          /* already gone */
+        }
+      }
       return;
     }
 
-    // Control channel JSON message.
+    // Control-channel message (responses, chunks, ws relays from the tunnel
+    // client) → count for batch metering (fire-and-forget, so the lease round-trip
+    // never convoys response delivery under concurrency), then dispatch.
+    this.msgsSinceFlush++;
+    if (this.msgsSinceFlush >= MSG_FLUSH_EVERY) void this.flushMessages().catch(() => {});
     let msg: Record<string, unknown>;
     try {
       msg = JSON.parse(typeof data === 'string' ? data : new TextDecoder().decode(data));
@@ -570,8 +612,10 @@ export class TunnelDO extends DurableObject<Env> {
     if (type === 'register') {
       // Resolve the metering account from the presented secret. An api token
       // (`vta_<slug>_…`) names + proves its account; the legacy shared
-      // TUNNEL_SECRET (or an open relay with no secret) maps to the built-in
-      // internal account for backward compatibility during migration.
+      // TUNNEL_SECRET maps to the built-in internal account for back-compat.
+      // FAIL CLOSED: when TUNNEL_SECRET is unset there is no legacy path at all
+      // (an api token is required) — an unset secret must never become an open
+      // relay that bills the internal account for anyone.
       const secret = String(msg.secret ?? '');
       const internal = this.env.INTERNAL_ACCOUNT || 'volter-internal';
       const parsed = parseToken(secret);
@@ -581,7 +625,7 @@ export class TunnelDO extends DurableObject<Env> {
       if (parsed?.kind === 'api') {
         slug = parsed.slug!;
         tokenHash = await hashToken(secret);
-      } else if (!this.env.TUNNEL_SECRET || safeEqual(secret, this.env.TUNNEL_SECRET)) {
+      } else if (this.env.TUNNEL_SECRET && safeEqual(secret, this.env.TUNNEL_SECRET)) {
         slug = internal;
         legacy = true;
       } else {
@@ -667,7 +711,15 @@ export class TunnelDO extends DurableObject<Env> {
         pending.bootstrapCookie
       );
       for (const [k, v] of Object.entries(pending.rate)) headers.set(k, v);
-      const body = msg.body ? b64decode(msg.body as string) : null;
+      // A malformed body must resolve the request (502), not throw out of the
+      // hibernation handler and leave it hung (timer already cleared above).
+      let body: Uint8Array | null;
+      try {
+        body = msg.body ? b64decode(msg.body as string) : null;
+      } catch {
+        pending.resolve(new Response('Malformed tunnel response', { status: 502, headers }));
+        return;
+      }
       pending.resolve(new Response(body, { status: (msg.status as number) || 200, headers }));
       return;
     }

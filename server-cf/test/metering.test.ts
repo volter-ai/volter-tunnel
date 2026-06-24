@@ -775,6 +775,40 @@ describe('relayed WS frames are metered (cap holds for chatty tunnels)', () => {
   }, 20000);
 });
 
+describe('robustness regressions', () => {
+  test('a malformed tunnel response resolves 502, not a 30s hang', async () => {
+    const id = 'malformed-t';
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?id=${id}`);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('no registered')), 8000);
+      ws.on('open', () =>
+        ws.send(JSON.stringify({ type: 'register', tunnelId: id, secret: hdrApi, authRequired: false }))
+      );
+      ws.on('message', (m) => {
+        const msg = JSON.parse(m.toString());
+        if (msg.type === 'registered') {
+          clearTimeout(timer);
+          resolve();
+        }
+        if (msg.type === 'request') {
+          // Reply with body that is NOT valid base64 — the relay must 502, not throw/hang.
+          ws.send(JSON.stringify({ type: 'response', reqId: msg.reqId, status: 200, headers: {}, body: '@@not base64@@' }));
+        }
+      });
+      ws.on('error', reject);
+    });
+    const t0 = Date.now();
+    const r = await reqFull(port, id, '/x');
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(r.status).toBe(502);
+    expect(Date.now() - t0).toBeLessThan(5000);
+  }, 15000);
+});
+
 describe('legacy shared secret still works (internal account)', () => {
   test('the legacy TUNNEL_SECRET registers under the internal account', async () => {
     const { ws, result } = rawRegister(port, 'legacy-1', LEGACY_SECRET);
