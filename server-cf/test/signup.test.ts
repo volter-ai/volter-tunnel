@@ -312,4 +312,27 @@ describe('public front door (landing + docs + waitlist)', () => {
     const res = await get(port, '/admin/waitlist');
     expect(res.status).toBe(403);
   });
+
+  test('DELETE /admin/waitlist/:user (root) removes an entry', async () => {
+    await post(port, '/waitlist', { githubUser: 'removeme' });
+    const root = { authorization: 'Bearer vtr_TESTROOT0000000000000000000000000000000' };
+    const del = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const r = http.request(
+        { host: '127.0.0.1', port, path: '/admin/waitlist/removeme', method: 'DELETE', headers: root },
+        (res) => {
+          let b = '';
+          res.on('data', (c) => (b += c));
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body: b }));
+        }
+      );
+      r.on('error', reject);
+      r.end();
+    });
+    expect(del.status).toBe(200);
+    expect(JSON.parse(del.body).removed).toBe(1);
+
+    const list = await get(port, '/admin/waitlist', root);
+    const wl = JSON.parse(list.body).waitlist as Array<{ githubUser: string }>;
+    expect(wl.some((w) => w.githubUser.toLowerCase() === 'removeme')).toBe(false);
+  });
 });

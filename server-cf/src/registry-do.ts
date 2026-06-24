@@ -299,10 +299,18 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
 
     // Operator review of the waitlist (root): approve by appending the login to
     // the SIGNUP_ALLOWED_USERS secret.
-    if (parts[0] === 'admin' && parts[1] === 'waitlist' && request.method === 'GET') {
+    if (parts[0] === 'admin' && parts[1] === 'waitlist' && !parts[2] && request.method === 'GET') {
       const auth = await this.authenticate(request);
       if (auth?.kind !== 'root') return json({ error: 'root token required' }, 403);
       return json({ waitlist: this.waitlist });
+    }
+
+    // Remove a waitlist entry (root): DELETE /admin/waitlist/:githubUser — for
+    // clearing processed approvals or spam.
+    if (parts[0] === 'admin' && parts[1] === 'waitlist' && parts[2] && request.method === 'DELETE') {
+      const auth = await this.authenticate(request);
+      if (auth?.kind !== 'root') return json({ error: 'root token required' }, 403);
+      return this.removeWaitlist(decodeURIComponent(parts[2]));
     }
 
     // Revoke a reserved handle (#3, root): DELETE /admin/reservations/:tunnelId.
@@ -558,6 +566,16 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     }
     await this.ctx.storage.put('waitlist', this.waitlist);
     return json({ ok: true });
+  }
+
+  /** Remove a waitlist entry by GitHub login (case-insensitive). */
+  private async removeWaitlist(githubUser: string): Promise<Response> {
+    const lower = githubUser.trim().toLowerCase();
+    const before = this.waitlist.length;
+    this.waitlist = this.waitlist.filter((w) => w.githubUser.toLowerCase() !== lower);
+    const removed = before - this.waitlist.length;
+    if (removed > 0) await this.ctx.storage.put('waitlist', this.waitlist);
+    return json({ ok: true, removed });
   }
 
   /** Revoke a reserved handle by routing to its TunnelDO (which clears the
