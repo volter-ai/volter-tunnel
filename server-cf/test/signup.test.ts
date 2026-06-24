@@ -36,6 +36,10 @@ function startStub(port: number): Promise<void> {
       if (req.headers.authorization === 'Bearer good-token') {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ id: 4242, login: 'octocat' }));
+      } else if (req.headers.authorization === 'Bearer other-token') {
+        // A valid GitHub user who is NOT on the allowlist.
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ id: 9999, login: 'mallory' }));
       } else {
         res.writeHead(401);
         res.end('{}');
@@ -123,6 +127,7 @@ beforeAll(async () => {
       DEFAULT_RESERVED_MAX: '3',
       SIGNUP_DAY_LIMIT: '1000',
       SIGNUP_MONTH_LIMIT: '20000',
+      SIGNUP_ALLOWED_USERS: 'octocat, gistuser', // allowlist (with spaces, to test trimming)
       GITHUB_API_BASE: `http://127.0.0.1:${stubPort}`,
     },
     experimental: { disableExperimentalWarning: true },
@@ -152,6 +157,11 @@ describe('GitHub token-exchange signup', () => {
   test('a bad token is rejected (401)', async () => {
     const res = await post(port, '/signup/github', { token: 'nope' });
     expect(res.status).toBe(401);
+  });
+
+  test('a valid GitHub user not on the allowlist is refused (403)', async () => {
+    const res = await post(port, '/signup/github', { token: 'other-token' });
+    expect(res.status).toBe(403);
   });
 
   test('logging in again rotates to a fresh token, same account', async () => {

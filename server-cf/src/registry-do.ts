@@ -325,9 +325,25 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     return true;
   }
 
+  /** Whether a GitHub login may sign up. Empty/unset allowlist = open signup;
+   *  a set allowlist restricts to those logins (case-insensitive). Gates account
+   *  creation only — existing secrets/tokens are unaffected. */
+  private signupAllowed(login: string): boolean {
+    const raw = this.env.SIGNUP_ALLOWED_USERS;
+    if (!raw || !raw.trim()) return true;
+    const allow = raw
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    return allow.includes(login.toLowerCase());
+  }
+
   /** Resolve a verified GitHub identity to an account + a fresh CLI api token.
    *  Logging in again rotates the prior github-cli token so creds don't pile up. */
   private async finalizeSignup(githubId: number, login: string): Promise<Response> {
+    if (!this.signupAllowed(login)) {
+      return json({ error: `signup not permitted for github:${login}` }, 403);
+    }
     const slug = `gh-${githubId}`;
     if (!(await this.provisionAccount(slug, `github:${login}`))) {
       return json({ error: 'at capacity — global ceiling reached' }, 503);
