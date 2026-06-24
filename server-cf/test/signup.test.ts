@@ -75,6 +75,24 @@ function post(port: number, path: string, body: unknown): Promise<{ status: numb
   });
 }
 
+function get(
+  port: number,
+  path: string,
+  headers: Record<string, string> = {}
+): Promise<{ status: number; body: string; ctype: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path, method: 'GET', headers }, (res) => {
+      let b = '';
+      res.on('data', (c) => (b += c));
+      res.on('end', () =>
+        resolve({ status: res.statusCode ?? 0, body: b, ctype: String(res.headers['content-type'] ?? '') })
+      );
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 /** Raw control register — resolves ok on `registered`, else {ok:false,code}. */
 function rawRegister(port: number, id: string, secret: string): Promise<{ ok: boolean; code?: number }> {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?id=${id}`);
@@ -214,5 +232,69 @@ describe('gist-proof signup (no token sent to us)', () => {
       verifier: 'deadbeef'.repeat(8), // 64 hex chars, but not the real verifier
     });
     expect(wrongVerifier.status).toBe(401);
+  });
+});
+
+describe('public front door (landing + docs + waitlist)', () => {
+  test('apex GET / serves the HTML landing page with the waitlist form', async () => {
+    const res = await get(port, '/');
+    expect(res.status).toBe(200);
+    expect(res.ctype).toContain('text/html');
+    expect(res.body).toContain('volter-tunnel');
+    expect(res.body).toContain('id="waitlist"');
+    expect(res.body).toContain("fetch('/waitlist'");
+    // example URLs use the configured TUNNEL_DOMAIN
+    expect(res.body).toContain(DOMAIN);
+  });
+
+  test('apex GET /docs serves the docs page', async () => {
+    const res = await get(port, '/docs');
+    expect(res.status).toBe(200);
+    expect(res.ctype).toContain('text/html');
+    expect(res.body).toContain('Documentation');
+    expect(res.body).toContain('volter-tunnel login');
+  });
+
+  test('POST /waitlist records a username not on the allowlist', async () => {
+    const res = await post(port, '/waitlist', {
+      githubUser: 'newdev',
+      email: 'newdev@example.com',
+      useCase: 'webhook testing',
+    });
+    expect(res.status).toBe(200);
+    expect(res.json.ok).toBe(true);
+    expect(res.json.alreadyAllowed).toBeUndefined();
+
+    // It shows up for the operator (root).
+    const list = await get(port, '/admin/waitlist', { authorization: 'Bearer vtr_TESTROOT0000000000000000000000000000000' });
+    expect(list.status).toBe(200);
+    const wl = JSON.parse(list.body).waitlist as Array<{ githubUser: string; email: string }>;
+    expect(wl.some((w) => w.githubUser === 'newdev' && w.email === 'newdev@example.com')).toBe(true);
+  });
+
+  test('POST /waitlist for an already-allowlisted user says they can sign up now', async () => {
+    const res = await post(port, '/waitlist', { githubUser: 'octocat' });
+    expect(res.status).toBe(200);
+    expect(res.json.alreadyAllowed).toBe(true);
+  });
+
+  test('POST /waitlist rejects an invalid GitHub username (400)', async () => {
+    const res = await post(port, '/waitlist', { githubUser: 'not a real-name!' });
+    expect(res.status).toBe(400);
+  });
+
+  test('re-submitting the same username dedups (latest wins, no duplicate row)', async () => {
+    await post(port, '/waitlist', { githubUser: 'dupedev', useCase: 'first' });
+    await post(port, '/waitlist', { githubUser: 'DupeDev', useCase: 'second' });
+    const list = await get(port, '/admin/waitlist', { authorization: 'Bearer vtr_TESTROOT0000000000000000000000000000000' });
+    const wl = JSON.parse(list.body).waitlist as Array<{ githubUser: string; useCase: string }>;
+    const rows = wl.filter((w) => w.githubUser.toLowerCase() === 'dupedev');
+    expect(rows.length).toBe(1);
+    expect(rows[0].useCase).toBe('second');
+  });
+
+  test('GET /admin/waitlist requires the root token (403 without)', async () => {
+    const res = await get(port, '/admin/waitlist');
+    expect(res.status).toBe(403);
   });
 });

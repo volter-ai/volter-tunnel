@@ -54,6 +54,19 @@ interface Report {
 /** Max abuse reports retained (operators review then act / revoke). */
 const REPORTS_CAP = 200;
 
+/** A public waitlist request (front-door form). An operator reviews these and
+ *  approves by appending the GitHub login to the SIGNUP_ALLOWED_USERS secret. */
+interface WaitlistEntry {
+  githubUser: string;
+  email: string;
+  useCase: string;
+  at: string;
+}
+
+/** Max waitlist entries retained. Dedup by githubUser keeps this from filling
+ *  with repeat submissions. */
+const WAITLIST_CAP = 1000;
+
 type Auth = { kind: 'root' } | { kind: 'service'; slug: string } | null;
 
 function json(data: unknown, status = 200): Response {
@@ -69,6 +82,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
   private accounts = new Map<string, DirEntry>();
   private tokens = new Map<string, TokenRecord>();
   private reports: Report[] = [];
+  private waitlist: WaitlistEntry[] = [];
   /** Token bucket guarding the unauthenticated public surface (cost-DoS). */
   private publicBurst: BurstState = { tokens: 0, last: 0, init: false };
   private loaded: Promise<void>;
@@ -85,6 +99,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       this.accounts = new Map(Object.entries((await ctx.storage.get<Record<string, DirEntry>>('accounts')) ?? {}));
       this.tokens = new Map(Object.entries((await ctx.storage.get<Record<string, TokenRecord>>('tokens')) ?? {}));
       this.reports = (await ctx.storage.get<Report[]>('reports')) ?? [];
+      this.waitlist = (await ctx.storage.get<WaitlistEntry[]>('waitlist')) ?? [];
     });
   }
 
@@ -232,7 +247,9 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     // Cost-DoS guard: rate-limit the unauthenticated public surface (signup +
     // report) — they are not metered by the credit ceiling.
     if (
-      (url.pathname.startsWith('/signup/') || url.pathname === '/report') &&
+      (url.pathname.startsWith('/signup/') ||
+        url.pathname === '/report' ||
+        url.pathname === '/waitlist') &&
       this.publicRateLimited()
     ) {
       return json({ error: 'rate limited' }, 429);
@@ -260,6 +277,12 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       return this.addReport((await request.json().catch(() => ({}))) as Record<string, unknown>);
     }
 
+    // Public waitlist request — unauthenticated; the landing-page form posts here.
+    if (url.pathname === '/waitlist') {
+      if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
+      return this.addWaitlist((await request.json().catch(() => ({}))) as Record<string, unknown>);
+    }
+
     // Fleet usage summary (root): every account's live usage + dollars in one call.
     if (parts[0] === 'admin' && parts[1] === 'usage' && request.method === 'GET') {
       const auth = await this.authenticate(request);
@@ -272,6 +295,14 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       const auth = await this.authenticate(request);
       if (auth?.kind !== 'root') return json({ error: 'root token required' }, 403);
       return json({ reports: this.reports });
+    }
+
+    // Operator review of the waitlist (root): approve by appending the login to
+    // the SIGNUP_ALLOWED_USERS secret.
+    if (parts[0] === 'admin' && parts[1] === 'waitlist' && request.method === 'GET') {
+      const auth = await this.authenticate(request);
+      if (auth?.kind !== 'root') return json({ error: 'root token required' }, 403);
+      return json({ waitlist: this.waitlist });
     }
 
     // Revoke a reserved handle (#3, root): DELETE /admin/reservations/:tunnelId.
@@ -501,6 +532,31 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     this.reports.push({ tunnelId, reason, at: new Date().toISOString() });
     if (this.reports.length > REPORTS_CAP) this.reports.splice(0, this.reports.length - REPORTS_CAP);
     await this.ctx.storage.put('reports', this.reports);
+    return json({ ok: true });
+  }
+
+  /** Record a public waitlist request. Validates the GitHub username shape,
+   *  dedups by login (latest submission wins), and caps the list. If the user is
+   *  already on the allowlist we say so — they can sign up right now. */
+  private async addWaitlist(body: Record<string, unknown>): Promise<Response> {
+    const githubUser = String(body.githubUser ?? '').trim();
+    // GitHub usernames: 1–39 chars, alphanumeric or single hyphens (no leading/
+    // trailing hyphen). Reject anything else so the list stays clean.
+    if (!/^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$/.test(githubUser)) {
+      return json({ error: 'enter a valid GitHub username' }, 400);
+    }
+    if (this.signupAllowed(githubUser)) {
+      return json({ ok: true, alreadyAllowed: true, message: 'already approved — you can sign up now' });
+    }
+    const email = String(body.email ?? '').trim().slice(0, 200);
+    const useCase = String(body.useCase ?? '').trim().slice(0, 500);
+    const lower = githubUser.toLowerCase();
+    this.waitlist = this.waitlist.filter((w) => w.githubUser.toLowerCase() !== lower);
+    this.waitlist.push({ githubUser, email, useCase, at: new Date().toISOString() });
+    if (this.waitlist.length > WAITLIST_CAP) {
+      this.waitlist.splice(0, this.waitlist.length - WAITLIST_CAP);
+    }
+    await this.ctx.storage.put('waitlist', this.waitlist);
     return json({ ok: true });
   }
 
