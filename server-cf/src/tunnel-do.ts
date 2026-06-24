@@ -15,9 +15,11 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
   type Env,
+  type HeaderRules,
   buildResponseHeaders,
   cookieFor,
   corsHeaders,
+  parseHeaderRules,
   stripAuthCookie,
   stripTokenParam,
   validateAuth,
@@ -116,6 +118,12 @@ export class TunnelDO extends DurableObject<Env> {
   private pendingHttp = new Map<string, PendingHttp>();
   private streaming = new Map<string, Streaming>();
   private pendingUpgrades = new Map<string, PendingUpgrade>();
+
+  /** Operator response-header rewrite rules (parsed once from env). */
+  private _headerRules: HeaderRules | null = null;
+  private get headerRules(): HeaderRules {
+    return (this._headerRules ??= parseHeaderRules(this.env.RESPONSE_HEADER_RULES));
+  }
 
   // ── metering state (ephemeral; safe to lose on hibernation) ────────────────
   /** Credits leased from the account but not yet spent. */
@@ -797,7 +805,8 @@ export class TunnelDO extends DurableObject<Env> {
       const headers = buildResponseHeaders(
         (msg.headers as Record<string, string>) || {},
         pending.request,
-        pending.bootstrapCookie
+        pending.bootstrapCookie,
+        this.headerRules
       );
       for (const [k, v] of Object.entries(pending.rate)) headers.set(k, v);
       // A malformed body must resolve the request (502), not throw out of the
@@ -822,7 +831,8 @@ export class TunnelDO extends DurableObject<Env> {
       const headers = buildResponseHeaders(
         (msg.headers as Record<string, string>) || {},
         pending.request,
-        pending.bootstrapCookie
+        pending.bootstrapCookie,
+        this.headerRules
       );
       for (const [k, v] of Object.entries(pending.rate)) headers.set(k, v);
       const self = this;
