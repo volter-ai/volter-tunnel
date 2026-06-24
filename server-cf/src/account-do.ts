@@ -178,6 +178,25 @@ export class AccountDO extends DurableObject<MeteringEnv> {
     this.usage.monthUsed += c;
   }
 
+  /** Best-effort durable usage point (Analytics Engine) — time-series of an
+   *  account's day/month credits + open tunnels. No-op when unbound (local/test). */
+  private recordAE(): void {
+    if (!this.env.USAGE_AE || !this.config) return;
+    try {
+      this.env.USAGE_AE.writeDataPoint({
+        indexes: [this.config.slug],
+        blobs: [this.config.slug, this.config.status, this.usage.day],
+        doubles: [
+          this.usage.dayUsed + this.usage.leased,
+          this.usage.monthUsed + this.usage.leased,
+          this.open.size,
+        ],
+      });
+    } catch {
+      /* best-effort */
+    }
+  }
+
   private addRaw(raw: UsageDelta | undefined): void {
     if (!raw) return;
     this.usage.raw.requests += raw.requests ?? 0;
@@ -312,6 +331,7 @@ export class AccountDO extends DurableObject<MeteringEnv> {
     }
     await this.persistOpen();
     await this.persistUsage();
+    this.recordAE();
     const rate = this.snapshot();
     return { grant, over: rate.day.remaining <= 0 || rate.month.remaining <= 0, rate };
   }
@@ -344,6 +364,7 @@ export class AccountDO extends DurableObject<MeteringEnv> {
     this.open.delete(tunnelId);
     await this.persistOpen();
     await this.persistUsage();
+    this.recordAE();
     return { ok: true };
   }
 

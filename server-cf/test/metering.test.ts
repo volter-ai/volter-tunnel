@@ -775,6 +775,22 @@ describe('relayed WS frames are metered (cap holds for chatty tunnels)', () => {
   }, 20000);
 });
 
+describe('fleet usage summary', () => {
+  test('GET /admin/usage returns all accounts + totals in dollars (root only)', async () => {
+    const forbidden = await admin(port, 'GET', '/admin/usage', acmeService);
+    expect(forbidden.status).toBe(403); // a service token can't see the whole fleet
+
+    const r = await admin(port, 'GET', '/admin/usage', ROOT_TOKEN);
+    expect(r.status).toBe(200);
+    const accounts = r.json.accounts as Array<{ slug: string; usd: { monthLimit: number } }>;
+    expect(Array.isArray(accounts)).toBe(true);
+    expect(accounts.find((a) => a.slug === 'acme')).toBeTruthy();
+    const totals = r.json.totals as { accounts: number; usd: { monthLimit: number } };
+    expect(totals.accounts).toBeGreaterThan(0);
+    expect(typeof totals.usd.monthLimit).toBe('number');
+  });
+});
+
 describe('robustness regressions', () => {
   test('register-replace does not throttle the surviving tunnel (regId race)', async () => {
     const id = 'race-t';

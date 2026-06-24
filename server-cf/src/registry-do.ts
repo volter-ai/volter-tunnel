@@ -155,6 +155,44 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     return res.json();
   }
 
+  /** Live usage for every account + fleet totals, in dollars (operator view). */
+  private async usageSummary(): Promise<unknown> {
+    interface U {
+      slug: string;
+      status: string;
+      openTunnels: number;
+      usd: { dayUsed: number; dayLimit: number; monthUsed: number; monthLimit: number };
+      day: { pct: number };
+      month: { pct: number };
+    }
+    const slugs = [...this.accounts.keys()];
+    const usages = (await Promise.all(
+      slugs.map((slug) => this.accountUsage(slug).catch(() => null))
+    )) as (U | null)[];
+    const accounts = usages.filter((u): u is U => !!u);
+    const totals = accounts.reduce(
+      (t, a) => ({
+        dayUsed: t.dayUsed + a.usd.dayUsed,
+        dayLimit: t.dayLimit + a.usd.dayLimit,
+        monthUsed: t.monthUsed + a.usd.monthUsed,
+        monthLimit: t.monthLimit + a.usd.monthLimit,
+      }),
+      { dayUsed: 0, dayLimit: 0, monthUsed: 0, monthLimit: 0 }
+    );
+    accounts.sort((a, b) => b.usd.monthUsed - a.usd.monthUsed);
+    return {
+      accounts: accounts.map((a) => ({
+        slug: a.slug,
+        status: a.status,
+        openTunnels: a.openTunnels,
+        usd: a.usd,
+        dayPct: a.day.pct,
+        monthPct: a.month.pct,
+      })),
+      totals: { usd: totals, accounts: accounts.length },
+    };
+  }
+
   // ── routing ──────────────────────────────────────────────────────────────────
   async fetch(request: Request): Promise<Response> {
     await this.loaded;
@@ -165,6 +203,13 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     // its allocation against the global budget at self-bootstrap.
     if (url.pathname === '/reserve-internal') {
       return this.reserveInternal((await request.json().catch(() => ({}))) as Record<string, unknown>);
+    }
+
+    // Fleet usage summary (root): every account's live usage + dollars in one call.
+    if (parts[0] === 'admin' && parts[1] === 'usage' && request.method === 'GET') {
+      const auth = await this.authenticate(request);
+      if (auth?.kind !== 'root') return json({ error: 'root token required' }, 403);
+      return json(await this.usageSummary());
     }
 
     if (parts[0] !== 'admin' || parts[1] !== 'accounts') {
