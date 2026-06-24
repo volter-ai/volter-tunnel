@@ -148,6 +148,33 @@ export interface Reservation {
   tunnelId?: string;
 }
 
+/** Mutable token-bucket state for the per-tunnel request-rate burst limiter (#4). */
+export interface BurstState {
+  tokens: number;
+  last: number;
+  init: boolean;
+}
+
+/**
+ * One step of a token-bucket burst limiter (#4). Refills `tokens` at `rps` per
+ * second up to `size`, then tries to spend one. Pure (mutates the passed state)
+ * so the rate math is unit-testable without a DO or real time. `rps <= 0`
+ * disables it (always allowed). Returns Retry-After seconds when limited, else 0.
+ */
+export function burstStep(s: BurstState, now: number, rps: number, size: number): number {
+  if (rps <= 0) return 0;
+  if (!s.init) {
+    s.tokens = size;
+    s.last = now;
+    s.init = true;
+  }
+  s.tokens = Math.min(size, s.tokens + ((now - s.last) / 1000) * rps);
+  s.last = now;
+  if (s.tokens < 1) return Math.max(1, Math.ceil((1 - s.tokens) / rps));
+  s.tokens -= 1;
+  return 0;
+}
+
 export type ReservationVerdict = 'claim' | 'refresh' | 'reclaim' | 'reject';
 
 /**

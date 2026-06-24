@@ -22,6 +22,11 @@ export interface Env extends MeteringEnv {
   /** Optional JSON response-header rewrite rules, applied on top of the built-in
    *  iframe strip: `{"set":{"x-foo":"bar"},"remove":["x-baz"]}`. */
   RESPONSE_HEADER_RULES?: string;
+  /** Per-tunnel request-rate burst limit (#4): sustained requests/sec. 0/unset =
+   *  disabled. The daily/monthly credit caps remain the primary fair-use limit. */
+  BURST_RPS?: string;
+  /** Token-bucket capacity for BURST_RPS (max instantaneous burst). Default 2×RPS. */
+  BURST_SIZE?: string;
 }
 
 /**

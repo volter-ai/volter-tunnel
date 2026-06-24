@@ -26,8 +26,8 @@ import {
   validateWsAuth,
 } from './auth';
 import { CREDIT_WEIGHTS, hashToken, parseToken, type UsageDelta } from './credits';
-import { envNum, reservationDecision } from './metering-types';
-import type { AuthorizeResult, LeaseResult, RateSnapshot, Reservation } from './metering-types';
+import { burstStep, envNum, reservationDecision } from './metering-types';
+import type { AuthorizeResult, BurstState, LeaseResult, RateSnapshot, Reservation } from './metering-types';
 
 interface CtlAttach {
   role: 'ctl';
@@ -141,6 +141,10 @@ export class TunnelDO extends DurableObject<Env> {
   private get headerRules(): HeaderRules {
     return (this._headerRules ??= parseHeaderRules(this.env.RESPONSE_HEADER_RULES));
   }
+
+  /** Per-tunnel request-rate burst limiter state (#4; in-memory, resets on
+   *  hibernation — lenient, it only bounds bursts while the DO is resident). */
+  private burst: BurstState = { tokens: 0, last: 0, init: false };
 
   /** Live request inspector ring (#5; in-memory, lost on hibernation). */
   private inspect: InspectEntry[] = [];
@@ -443,6 +447,19 @@ export class TunnelDO extends DurableObject<Env> {
     const attach = this.ctlAttach();
     if (!ctl || !attach?.registered) {
       return new Response('Tunnel not connected', { status: 502, headers: corsHeaders(request) });
+    }
+
+    // Per-tunnel request-rate burst limit (#4) — cheap flood guard ahead of auth
+    // and forwarding. The daily/monthly credit caps remain the primary limit.
+    const rps = envNum(this.env.BURST_RPS, 0);
+    if (rps > 0) {
+      const retry = burstStep(this.burst, Date.now(), rps, envNum(this.env.BURST_SIZE, rps * 2));
+      if (retry > 0) {
+        return new Response('Too Many Requests', {
+          status: 429,
+          headers: { ...corsHeaders(request), 'retry-after': String(retry) },
+        });
+      }
     }
 
     // Basic-auth gate (#6): if the tunnel was registered with credentials, every
