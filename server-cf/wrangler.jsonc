@@ -39,6 +39,12 @@
   // Global = Σ(account limits) ceiling.
   "vars": {
     "TUNNEL_DOMAIN": "voltertest.xyz",
+    // Full per-tunnel isolation: a data-plane JWT MUST carry a `tid` claim matching
+    // the tunnel (the gateway mints these via /api/tunnel/token). Reject tokens
+    // without one — closes cross-tenant viewing of authRequired tunnels. Revert by
+    // setting "false" (or removing) + redeploy if a preview path still sends a
+    // session token. Only affects authRequired:true tunnels.
+    "REQUIRE_TID": "true",
     "INTERNAL_ACCOUNT": "volter-internal",
     "INTERNAL_DAY_LIMIT": "10000000",
     "INTERNAL_MONTH_LIMIT": "100000000",
