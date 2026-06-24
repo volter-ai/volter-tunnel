@@ -12,13 +12,17 @@ Last updated: 2026-06-24.
 
 Shipped, tested, committed: **#1** idle-reclaim · **#7** header rewrite rules ·
 **#9** wildcard subdomains · **#8** CLI banner + QR · **#5** live inspector ·
-**#3 (partial)** per-account reserved-id count cap. Suite: 69 CF + 10 root green.
+**#6** basic-auth gate · **#3 (partial)** per-account reserved-id count cap.
+Suite: 72 CF + 10 root green.
 
-Remaining: **#4** largely already satisfied by the metering substrate (daily/
-monthly credit cutoff + concurrency + duration metering); only short-window
-req/sec burst is net-new. **#6** net-new (basic-auth gate self-contained; OAuth
-gate overlaps #2). **#2** + the rest of **#3** (identity, revocation,
-abuse-report) need the GitHub OAuth App. **#10/#11/#12/#13/#14** Phase 2.
+Remaining:
+- **#4** — largely already satisfied by the metering substrate (daily/monthly
+  credit cutoff + concurrency + duration metering). Only short-window req/sec
+  burst is net-new, and it needs a policy threshold; deferred pending that call.
+- **#2** + rest of **#3** (identity-gating, handle revocation, abuse-report) and
+  the **OAuth** form of **#6** — all need a registered **GitHub OAuth App**
+  (client id + secret). Blocked on that input.
+- **#10/#11/#12/#13/#14** — Phase 2 (persistence/paid/infra).
 
 ---
 
