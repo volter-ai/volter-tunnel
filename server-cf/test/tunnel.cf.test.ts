@@ -168,6 +168,30 @@ test('wildcard subdomains under a reserved id route to that tunnel (P1 #9)', asy
   expect(deep.body).toBe('hello from origin');
 });
 
+test('the live inspector records recent request metadata (P1 #5)', async () => {
+  await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/hello' });
+  await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/nope' }); // 404
+
+  const res = await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/__volter_inspect' });
+  expect(res.status).toBe(200);
+  const data = JSON.parse(res.body) as {
+    tunnelId: string;
+    entries: Array<{ method: string; path: string; status: number | null; ms: number | null }>;
+  };
+  expect(data.tunnelId).toBe(TUNNEL_ID);
+
+  const hello = data.entries.find((e) => e.path === '/hello');
+  expect(hello?.method).toBe('GET');
+  expect(hello?.status).toBe(200);
+  expect(typeof hello?.ms).toBe('number');
+
+  const nope = data.entries.find((e) => e.path === '/nope');
+  expect(nope?.status).toBe(404);
+
+  // The inspector endpoint itself must not appear in the buffer.
+  expect(data.entries.some((e) => e.path === '/__volter_inspect')).toBe(false);
+});
+
 test('forwards a POST body and relays the echoed response', async () => {
   const res = await requestViaTunnel(relayPort, TUNNEL_ID, {
     path: '/echo',
