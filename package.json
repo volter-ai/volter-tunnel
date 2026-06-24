@@ -1,6 +1,6 @@
 {
   "name": "@volter/tunnel",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Volter tunnel — WebSocket-based HTTP/WS reverse tunnel: a relay server plus a client connector library and CLI.",
   "type": "module",
   "license": "UNLICENSED",
