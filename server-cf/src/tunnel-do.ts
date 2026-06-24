@@ -70,9 +70,24 @@ interface PendingUpgrade {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/** One captured request for the live inspector (#5). Metadata only — no bodies
+ *  or headers; persistence/replay is the paid #10. In-memory, so the buffer is
+ *  lost on hibernation (fine for a live view of an actively-used tunnel). */
+interface InspectEntry {
+  t: number;
+  method: string;
+  path: string;
+  status: number | null;
+  ms: number | null;
+  bytes: number | null;
+}
+
 /** Charge relayed messages (stream chunks / WS frames) in batches of this many,
  *  keeping the per-frame path cheap. Caps unmetered overshoot at one batch. */
 const MSG_FLUSH_EVERY = 32;
+
+/** Max requests retained in the live inspector ring (#5). */
+const INSPECT_CAP = 50;
 
 function b64encode(bytes: Uint8Array): string {
   let s = '';
@@ -123,6 +138,27 @@ export class TunnelDO extends DurableObject<Env> {
   private _headerRules: HeaderRules | null = null;
   private get headerRules(): HeaderRules {
     return (this._headerRules ??= parseHeaderRules(this.env.RESPONSE_HEADER_RULES));
+  }
+
+  /** Live request inspector ring (#5; in-memory, lost on hibernation). */
+  private inspect: InspectEntry[] = [];
+  private inspectByReq = new Map<string, InspectEntry>();
+
+  /** Record a request as it starts; trims the ring to INSPECT_CAP. */
+  private pushInspect(reqId: string, method: string, path: string): void {
+    const e: InspectEntry = { t: Date.now(), method, path, status: null, ms: null, bytes: null };
+    this.inspect.push(e);
+    if (this.inspect.length > INSPECT_CAP) this.inspect.shift();
+    this.inspectByReq.set(reqId, e);
+  }
+  /** Fill in a request's outcome (status, latency, response size) on completion. */
+  private finishInspect(reqId: string, status: number, bytes: number | null): void {
+    const e = this.inspectByReq.get(reqId);
+    if (!e) return;
+    e.status = status;
+    e.ms = Date.now() - e.t;
+    e.bytes = bytes;
+    this.inspectByReq.delete(reqId);
   }
 
   // ── metering state (ephemeral; safe to lose on hibernation) ────────────────
@@ -379,6 +415,15 @@ export class TunnelDO extends DurableObject<Env> {
       if (auth.source === 'query') bootstrapCookie = cookieFor(auth.token, this.env.TUNNEL_DOMAIN);
     }
 
+    // Live request inspector (#5): recent request metadata, served on a reserved
+    // path (never forwarded) and gated by the same auth as the tunnel above.
+    if (url.pathname === '/__volter_inspect') {
+      return Response.json(
+        { tunnelId: attach.tunnelId, entries: this.inspect },
+        { headers: corsHeaders(request) }
+      );
+    }
+
     const forwardPath = stripTokenParam(url.pathname + url.search);
     const forwardHeaders = stripAuthCookie(headersToObject(request.headers));
     const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
@@ -415,10 +460,12 @@ export class TunnelDO extends DurableObject<Env> {
     const rateHeaders = this.rateHeaders();
 
     const reqId = crypto.randomUUID();
+    this.pushInspect(reqId, request.method, url.pathname);
     return await new Promise<Response>((resolve) => {
       const timer = setTimeout(() => {
         this.pendingHttp.delete(reqId);
         this.streaming.delete(reqId);
+        this.finishInspect(reqId, 504, null);
         resolve(new Response('Tunnel timeout', { status: 504, headers: corsHeaders(request) }));
       }, 30000);
       this.pendingHttp.set(reqId, { resolve, timer, request, bootstrapCookie, rate: rateHeaders });
@@ -615,8 +662,9 @@ export class TunnelDO extends DurableObject<Env> {
         /* ignore */
       }
     }
-    for (const [, p] of this.pendingHttp) {
+    for (const [rid, p] of this.pendingHttp) {
       clearTimeout(p.timer);
+      this.finishInspect(rid, 502, null);
       try {
         p.resolve(new Response('Tunnel disconnected', { status: 502 }));
       } catch {
@@ -815,9 +863,11 @@ export class TunnelDO extends DurableObject<Env> {
       try {
         body = msg.body ? b64decode(msg.body as string) : null;
       } catch {
+        this.finishInspect(msg.reqId as string, 502, null);
         pending.resolve(new Response('Malformed tunnel response', { status: 502, headers }));
         return;
       }
+      this.finishInspect(msg.reqId as string, (msg.status as number) || 200, body ? body.length : 0);
       pending.resolve(new Response(body, { status: (msg.status as number) || 200, headers }));
       return;
     }
@@ -828,6 +878,9 @@ export class TunnelDO extends DurableObject<Env> {
       clearTimeout(pending.timer);
       this.pendingHttp.delete(msg.reqId as string);
       const reqId = msg.reqId as string;
+      // Streamed: record status + latency-to-first-byte now; body size is unknown
+      // (chunks stream out), so leave bytes null.
+      this.finishInspect(reqId, (msg.status as number) || 200, null);
       const headers = buildResponseHeaders(
         (msg.headers as Record<string, string>) || {},
         pending.request,
