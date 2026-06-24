@@ -45,9 +45,9 @@ const STYLE = /* css */ `
     position: sticky; top: 0; z-index: 10;
   }
   .nav .wrap { display: flex; align-items: center; gap: 18px; height: 64px; }
-  .brand { font-weight: 700; font-size: 20px; display: flex; align-items: center; gap: 8px; color: var(--text-color); }
+  .brand { font-weight: 700; font-size: 20px; display: flex; align-items: center; gap: 9px; color: var(--text-color); }
   .brand:hover { text-decoration: none; }
-  .brand .mark { width: 24px; height: 24px; background: var(--npm-red); border-radius: 4px; }
+  .brand .mark { display: block; }
   .nav nav { margin-left: auto; display: flex; gap: 24px; font-size: 16px; }
   .nav nav a { color: var(--text-color-light); transition: color 0.2s ease; }
   .nav nav a:hover { color: var(--npm-red-hover); text-decoration: none; }
@@ -171,9 +171,20 @@ const STYLE = /* css */ `
   }
 `;
 
-// npm-style red block mark.
+// Logo: a tunnel archway (the portal) with a lightning bolt in the opening —
+// "tunnel" + "volt(er)". White on the npm-red rounded square. Reads cleanly from
+// 96px down to a 16px favicon. Single source of truth for the mark + favicon.
+const LOGO_PATHS =
+  `<path fill="#fff" fill-rule="evenodd" d="M15 84 V48 a35 35 0 0 1 70 0 V84 H67 V48 a17 17 0 0 0 -34 0 V84 Z"/>` +
+  `<path fill="#fff" d="M53 49 L41 67 H50 L47 81 L61 61 H51 Z"/>`;
+function logoSvg(size: number): string {
+  return `<svg class="mark" width="${size}" height="${size}" viewBox="0 0 100 100" aria-hidden="true"><rect width="100" height="100" rx="22" fill="#cb3837"/>${LOGO_PATHS}</svg>`;
+}
 const FAVICON =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath fill='%23cb3837' d='M12 12h76v76H12z'/%3E%3Cpath fill='%23fff' d='M25 25h19v31h-7V32h-5v24h-7V25zm24 0h19v31h-7V32h-5v24h-7V25z'/%3E%3C/svg%3E";
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E" +
+  "%3Crect width='100' height='100' rx='22' fill='%23cb3837'/%3E" +
+  "%3Cpath fill='%23fff' fill-rule='evenodd' d='M15 84 V48 a35 35 0 0 1 70 0 V84 H67 V48 a17 17 0 0 0 -34 0 V84 Z'/%3E" +
+  "%3Cpath fill='%23fff' d='M53 49 L41 67 H50 L47 81 L61 61 H51 Z'/%3E%3C/svg%3E";
 
 function shell(title: string, body: string): string {
   return `<!doctype html><html lang="en"><head>
@@ -187,7 +198,7 @@ function shell(title: string, body: string): string {
 
 function nav(): string {
   return `<header class="nav"><div class="wrap">
-    <a href="/" class="brand"><span class="mark"></span>volter-tunnel</a>
+    <a href="/" class="brand">${logoSvg(26)}volter-tunnel</a>
     <nav>
       <a href="/#features">Features</a>
       <a href="/#start">Quickstart</a>
@@ -200,7 +211,7 @@ function nav(): string {
 function footer(): string {
   return `<footer><div class="wrap">
     <div class="brand-col">
-      <a href="/" class="brand"><span class="mark"></span>volter-tunnel</a>
+      <a href="/" class="brand">${logoSvg(22)}volter-tunnel</a>
       <p>Open-source HTTP/WS reverse tunnel on Cloudflare's edge.</p>
     </div>
     <div class="links-col">
