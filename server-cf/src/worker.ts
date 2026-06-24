@@ -26,7 +26,14 @@ export default {
 
     // Management plane — token/account/usage admin. Routed to the single
     // RegistryDO, which authenticates (root or service token) and coordinates.
-    if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+    // Self-serve signup (#2) is unauthenticated by design — it establishes
+    // identity via GitHub — and shares the same RegistryDO.
+    if (
+      url.pathname === '/admin' ||
+      url.pathname.startsWith('/admin/') ||
+      url.pathname === '/signup' ||
+      url.pathname.startsWith('/signup/')
+    ) {
       const id = env.REGISTRY.idFromName('registry');
       return env.REGISTRY.get(id).fetch(request);
     }

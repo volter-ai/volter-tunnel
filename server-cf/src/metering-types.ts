@@ -35,6 +35,15 @@ export interface MeteringEnv {
   /** Optional Analytics Engine dataset for durable per-account usage time-series.
    *  Absent in local/test → rollups are skipped (best-effort). */
   USAGE_AE?: AnalyticsEngineDataset;
+
+  /** GitHub API base for signup identity verification (#2). Default
+   *  https://api.github.com; tests point it at a local stub. */
+  GITHUB_API_BASE?: string;
+  /** Free-tier limits applied to a self-provisioned GitHub-signup account. */
+  SIGNUP_DAY_LIMIT?: string;
+  SIGNUP_MONTH_LIMIT?: string;
+  /** HMAC secret for stateless gist-proof nonces (#2). Falls back to ROOT_TOKEN. */
+  SIGNUP_NONCE_SECRET?: string;
 }
 
 /** Authoritative per-account configuration (lives in the AccountDO). */
