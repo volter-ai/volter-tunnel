@@ -100,26 +100,52 @@ export function last4(token: string): string {
 export interface CreditWeights {
   request: number;
   wsUpgrade: number;
+  /** Per relayed DO message (response chunk or WebSocket frame). */
+  message: number;
   byte: number;
   second: number;
 }
 
 /**
- * Default weights. Charge 1 credit per HTTP request and per WS upgrade; bytes
- * and tunnel-seconds are free by default (egress is free on Workers; idle-tunnel
- * duration is bounded by the concurrent cap, not priced). Raise `byte`/`second`
- * to price bandwidth or long-lived tunnels.
+ * Credits are denominated in **ops** — the universal Cloudflare billable unit.
+ * Every event that wakes/charges the relay's Durable Object counts as 1 op:
+ * an HTTP request, a WS upgrade, and each relayed message (a streamed response
+ * chunk or a WebSocket frame). Metering messages — not just the opening request
+ * — is what makes a dollar cap actually hold for streaming/WS-heavy tunnels.
+ *
+ * Dollars = credits × COST_PER_OP_USD. Bytes/seconds are 0 (egress is free on
+ * Workers; idle duration is ~0 under hibernation and bounded by the concurrency
+ * cap), but the message weight captures the per-frame DO cost that does bill.
  */
 export const CREDIT_WEIGHTS: CreditWeights = {
   request: 1,
   wsUpgrade: 1,
+  message: 1,
   byte: 0,
   second: 0,
 };
 
+/**
+ * Conservative estimate of the Cloudflare cost of one op (a DO request +
+ * sometimes a Worker request + a slice of DO duration), in USD. Real DO/Worker
+ * request prices are ~$0.15–0.45 per million; $1/million here leaves margin for
+ * duration. Tune as real invoices land — it's the only money↔ops knob.
+ */
+export const COST_PER_OP_USD = 0.000001;
+
+/** Dollar amount → integer op-credits (for setting limits in money). */
+export function usdToCredits(usd: number): number {
+  return Math.round(usd / COST_PER_OP_USD);
+}
+/** Op-credits → dollars, rounded to cents (for display). */
+export function creditsToUsd(credits: number): number {
+  return Math.round(credits * COST_PER_OP_USD * 100) / 100;
+}
+
 export interface UsageDelta {
   requests?: number;
   wsUpgrades?: number;
+  messages?: number;
   bytes?: number;
   seconds?: number;
 }
@@ -129,6 +155,7 @@ export function toCredits(d: UsageDelta, w: CreditWeights = CREDIT_WEIGHTS): num
   const raw =
     (d.requests ?? 0) * w.request +
     (d.wsUpgrades ?? 0) * w.wsUpgrade +
+    (d.messages ?? 0) * w.message +
     (d.bytes ?? 0) * w.byte +
     (d.seconds ?? 0) * w.second;
   return Math.ceil(raw);

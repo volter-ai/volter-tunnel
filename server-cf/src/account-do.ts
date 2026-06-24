@@ -15,7 +15,7 @@
  * leaseChunk × concurrentMax — independent of throughput, by construction.
  */
 import { DurableObject } from 'cloudflare:workers';
-import { CREDIT_WEIGHTS, dayKey, monthKey, toCredits, type UsageDelta } from './credits';
+import { CREDIT_WEIGHTS, creditsToUsd, dayKey, monthKey, toCredits, type UsageDelta } from './credits';
 import type {
   AccountConfig,
   AuthorizeResult,
@@ -323,6 +323,12 @@ export class AccountDO extends DurableObject<MeteringEnv> {
       concurrentMax: c?.concurrentMax ?? 0,
       raw: { ...this.usage.raw },
       resetAt: { day: this.usage.day, month: this.usage.month },
+      usd: {
+        dayUsed: creditsToUsd(this.usage.dayUsed + this.usage.leased),
+        dayLimit: creditsToUsd(dayLimit),
+        monthUsed: creditsToUsd(this.usage.monthUsed + this.usage.leased),
+        monthLimit: creditsToUsd(monthLimit),
+      },
     };
   }
 }

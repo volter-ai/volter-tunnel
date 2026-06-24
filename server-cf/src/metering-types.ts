@@ -63,6 +63,8 @@ export interface UsageView {
   concurrentMax: number;
   raw: { requests: number; wsUpgrades: number; bytes: number; seconds: number };
   resetAt: { day: string; month: string };
+  /** The same usage/limits expressed in dollars (credits × COST_PER_OP_USD). */
+  usd: { dayUsed: number; dayLimit: number; monthUsed: number; monthLimit: number };
 }
 
 /** One limit window. `reset` is the UTC epoch-seconds at which it refills. */

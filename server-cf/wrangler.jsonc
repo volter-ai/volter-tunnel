@@ -24,19 +24,22 @@
   // Metering vars (non-secret) — global ceiling = Σ(account limits) cap, and the
   // built-in internal account's defaults. ROOT_TOKEN is a secret (wrangler secret
   // put ROOT_TOKEN). Credits are charged per request/ws-upgrade by default.
-  // Limits are real, enforced caps (credits ≈ requests + ws-upgrades). The
-  // internal account is treated like any other — these are a genuine ceiling
-  // (~$0.75/day worst-case CF spend at 5M req) with ~5× headroom over realistic
-  // dev/QA traffic, not an exemption. Global = Σ(account limits) ceiling. Tune up
-  // with a single PATCH /admin/accounts/:slug/limits if a real account needs more.
+  // Limits are denominated in MONEY. Credits are ops (≈ CF billable events:
+  // requests, ws-upgrades, relayed messages) and 1 op = COST_PER_OP_USD
+  // (~$1/million, conservative). So these op-limits are a hard dollar cap:
+  //   INTERNAL_DAY_LIMIT  10,000,000 ops  = $10/day
+  //   INTERNAL_MONTH_LIMIT 100,000,000 ops = $100/month
+  // Every account (internal included) is gated the same way. Create/raise with
+  // dollars directly: POST /admin/accounts { dayUsd: 10, monthUsd: 100 }.
+  // Global = Σ(account limits) ceiling.
   "vars": {
     "TUNNEL_DOMAIN": "voltertest.xyz",
     "INTERNAL_ACCOUNT": "volter-internal",
-    "INTERNAL_DAY_LIMIT": "5000000",
+    "INTERNAL_DAY_LIMIT": "10000000",
     "INTERNAL_MONTH_LIMIT": "100000000",
     "INTERNAL_CONCURRENT": "1000",
-    "GLOBAL_DAY_LIMIT": "50000000",
-    "GLOBAL_MONTH_LIMIT": "1000000000",
+    "GLOBAL_DAY_LIMIT": "1000000000",
+    "GLOBAL_MONTH_LIMIT": "10000000000",
     "DEFAULT_CONCURRENT": "100",
     "DEFAULT_LEASE_CHUNK": "50"
   },
