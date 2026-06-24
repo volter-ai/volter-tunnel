@@ -51,6 +51,10 @@ export interface TunnelOptions {
   secret?: string;
   /** Whether the tunnel requires JWT auth for incoming requests (default: true) */
   authRequired?: boolean;
+  /** Optional HTTP Basic Auth gate: every inbound request must present these
+   *  credentials (independent of the JWT layer). Handy for protecting a shared
+   *  dev tunnel without wiring JWTs. */
+  basicAuth?: { user: string; pass: string };
   /** Logger instance (defaults to console-based logger) */
   logger?: TunnelLogger;
 }
@@ -284,6 +288,7 @@ export function createTunnel({
   tunnelId,
   secret,
   authRequired,
+  basicAuth,
   logger,
 }: TunnelOptions): Promise<TunnelHandle> {
   const log = logger ?? defaultLogger;
@@ -349,6 +354,7 @@ export function createTunnel({
           secret,
           replace: true,
           authRequired: authRequired !== false,
+          ...(basicAuth ? { basicAuth } : {}),
         })
       );
     });
@@ -911,7 +917,7 @@ if (import.meta.main) {
   const port = Number(flag('port'));
   if (!port) {
     console.error(
-      'Usage: bun run tunnel-client.ts --port <port> [--host <url>] [--tunnel-id <id>] [--auth-not-required] [--no-qr]'
+      'Usage: bun run tunnel-client.ts --port <port> [--host <url>] [--tunnel-id <id>] [--auth-not-required] [--basic-auth user:pass] [--no-qr]'
     );
     process.exit(1);
   }
@@ -944,6 +950,11 @@ if (import.meta.main) {
   if (secret) opts.secret = secret;
   if (tunnelId) opts.tunnelId = tunnelId;
   if (authNotRequired) opts.authRequired = false;
+  const basicAuthArg = flag('basic-auth'); // "user:pass"
+  if (basicAuthArg) {
+    const i = basicAuthArg.indexOf(':');
+    if (i > 0) opts.basicAuth = { user: basicAuthArg.slice(0, i), pass: basicAuthArg.slice(i + 1) };
+  }
   const handle = await createTunnel(opts);
   console.log(handle.url); // stdout stays machine-readable (just the URL)
 

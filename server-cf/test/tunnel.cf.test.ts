@@ -297,3 +297,51 @@ describe('JWT auth (authRequired tunnel)', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('Basic-auth gate (#6)', () => {
+  let baTunnel: TunnelHandle;
+
+  beforeAll(async () => {
+    baTunnel = await createTunnel({
+      port: originPort,
+      host: `http://127.0.0.1:${relayPort}`,
+      tunnelId: 'cfbasic',
+      secret: SECRET,
+      authRequired: false,
+      basicAuth: { user: 'admin', pass: 's3cret' },
+      logger: NO_LOG,
+    });
+  }, 15000);
+
+  afterAll(() => {
+    try {
+      baTunnel?.close();
+    } catch {
+      /* ignore */
+    }
+  });
+
+  test('rejects a request with no credentials (401)', async () => {
+    const res = await requestViaTunnel(relayPort, 'cfbasic', { path: '/hello' });
+    expect(res.status).toBe(401);
+  });
+
+  test('rejects wrong credentials (401)', async () => {
+    const bad = Buffer.from('admin:nope').toString('base64');
+    const res = await requestViaTunnel(relayPort, 'cfbasic', {
+      path: '/hello',
+      headers: { Authorization: `Basic ${bad}` },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test('allows correct credentials (200)', async () => {
+    const good = Buffer.from('admin:s3cret').toString('base64');
+    const res = await requestViaTunnel(relayPort, 'cfbasic', {
+      path: '/hello',
+      headers: { Authorization: `Basic ${good}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toBe('hello from origin');
+  });
+});

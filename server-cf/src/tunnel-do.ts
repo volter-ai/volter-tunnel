@@ -46,6 +46,8 @@ interface CtlAttach {
   /** Re-authorize inputs (so a reaped-but-live tunnel can re-register its entry). */
   legacy?: boolean;
   tokenHash?: string;
+  /** SHA-256 of "user:pass" when the tunnel is gated by HTTP Basic Auth (#6). */
+  basicAuthHash?: string;
 }
 interface BrowserAttach {
   role: 'browser';
@@ -387,6 +389,20 @@ export class TunnelDO extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  /** Validate an Authorization: Basic header against the stored "user:pass" hash
+   *  (#6). Constant-time on the hash; returns false on any missing/malformed input. */
+  private async checkBasicAuth(request: Request, expectedHash: string): Promise<boolean> {
+    const h = request.headers.get('authorization');
+    if (!h || !h.startsWith('Basic ')) return false;
+    let decoded: string;
+    try {
+      decoded = atob(h.slice(6).trim());
+    } catch {
+      return false;
+    }
+    return safeEqual(await hashToken(decoded), expectedHash);
+  }
+
   // ── inbound HTTP ──────────────────────────────────────────────────────────
   private async handleHttpRequest(request: Request, url: URL): Promise<Response> {
     // Answer CORS preflight BEFORE the connectivity check (mirrors server.mjs) so
@@ -398,6 +414,19 @@ export class TunnelDO extends DurableObject<Env> {
     const attach = this.ctlAttach();
     if (!ctl || !attach?.registered) {
       return new Response('Tunnel not connected', { status: 502, headers: corsHeaders(request) });
+    }
+
+    // Basic-auth gate (#6): if the tunnel was registered with credentials, every
+    // inbound request must present a matching Authorization: Basic header before
+    // anything is served or forwarded (independent of the JWT layer below).
+    if (attach.basicAuthHash && !(await this.checkBasicAuth(request, attach.basicAuthHash))) {
+      return new Response('Authentication required', {
+        status: 401,
+        headers: {
+          ...corsHeaders(request),
+          'www-authenticate': 'Basic realm="volter-tunnel"',
+        },
+      });
     }
 
     let bootstrapCookie: string | null = null;
@@ -824,6 +853,9 @@ export class TunnelDO extends DurableObject<Env> {
       }
 
       const authRequired = msg.authRequired !== false;
+      const ba = msg.basicAuth as { user?: string; pass?: string } | undefined;
+      const basicAuthHash =
+        ba && ba.user && ba.pass ? await hashToken(`${ba.user}:${ba.pass}`) : undefined;
       ws.serializeAttachment({
         role: 'ctl',
         registered: true,
@@ -835,6 +867,7 @@ export class TunnelDO extends DurableObject<Env> {
         regId,
         legacy,
         tokenHash,
+        basicAuthHash,
       } satisfies CtlAttach);
       // Seed the rate snapshot + quota level so headers work from the first
       // request and we don't re-announce the level the client already sees.
