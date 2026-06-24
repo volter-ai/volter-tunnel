@@ -31,14 +31,25 @@ Also fixed a routing-collision bug: management paths (`/admin`, `/signup`,
 Also done (Phase 2): **#10** inspector replay + persisted history
 (`INSPECT_REPLAY`, off by default; DO-storage cost is the paid driver).
 
-Remaining — all **Phase 2** (paid / infra / decisions):
-- **#11** higher bandwidth tiers & **#14** more concurrent tunnels — already
-  mechanically supported (per-account `dayLimit`/`monthLimit`/`concurrentMax`
-  are patchable via the admin API); only the pricing/packaging layer is left.
-- **#12** BYO custom hostname (needs CF-for-SaaS zone)
-- **#13** TCP/UDP tunnels (needs off-Cloudflare compute)
+**Deployed to production** (`volter-tunnel.aaron-0ed.workers.dev` +
+`*.voltertest.xyz`), allowlist signup live, security review done + hardened
+(see SECURITY.md). 91 CF + 10 root tests green.
+
+Status of the rest:
+- **#11 bandwidth tiers / #14 concurrent tiers — DONE by configuration.** No code
+  needed: per-account `dayUsd`/`monthUsd`/`concurrentMax`/`reservedMax` are set at
+  account creation and patchable via the admin API. A "tier" is a named set of
+  those limits; productizing (pricing page, Stripe) is outside this repo.
+- **#12 BYO custom hostname — BLOCKED on infra.** Needs the Cloudflare for SaaS
+  product (custom-hostname + cert provisioning). The worker routing is small but
+  inert without the subscription; not buildable-to-done on the current stack.
+- **#13 TCP/UDP — BLOCKED on the platform.** Cloudflare Workers/DO cannot accept
+  inbound raw TCP. Requires CF Spectrum (enterprise) or a separate TCP-listener
+  host (e.g. Fly). A helper-based TCP-over-WebSocket variant IS buildable on this
+  stack (both ends run our client), but it can't be a transparent ngrok-style
+  `host:port`. Design pending an infra decision.
 - **#6 OAuth-gating variant** — end-user OAuth in front of a tunnel (basic-auth
-  form shipped); can reuse the #2 GitHub plumbing.
+  form shipped); can reuse the #2 GitHub plumbing when wanted.
 
 ---
 
