@@ -554,7 +554,11 @@ export class TunnelDO extends DurableObject<Env> {
           { status: 401, headers: corsHeaders(request) }
         );
       }
-      if (auth.source === 'query') bootstrapCookie = cookieFor(auth.token, this.env.TUNNEL_DOMAIN);
+      if (auth.source === 'query') {
+        // Scope the cookie to THIS tunnel so a token bootstrapped on one tunnel's
+        // subdomain isn't sent to (and rejected by) another open tunnel.
+        bootstrapCookie = cookieFor(auth.token, `${attach.tunnelId}.${this.env.TUNNEL_DOMAIN}`);
+      }
     }
 
     // Live request inspector (#5): recent request metadata, served on a reserved

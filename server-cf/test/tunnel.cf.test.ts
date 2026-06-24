@@ -303,6 +303,30 @@ describe('JWT auth (authRequired tunnel)', () => {
     });
     expect(res.status).toBe(401);
   });
+
+  test('the bootstrap cookie is scoped to THIS tunnel (not the apex)', async () => {
+    const token = jwt.sign({ sub: 'tester', tid: AUTH_ID }, JWT_SECRET, { algorithm: 'HS256' });
+    const setCookie = await new Promise<string>((resolve, reject) => {
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port: relayPort,
+          path: `/hello?__volter_token=${encodeURIComponent(token)}`,
+          method: 'GET',
+          headers: { Host: `${AUTH_ID}.${DOMAIN}` },
+        },
+        (res) => {
+          res.resume();
+          resolve(String(res.headers['set-cookie']?.[0] ?? ''));
+        }
+      );
+      req.on('error', reject);
+      req.end();
+    });
+    // Scoped to <id>.<domain> so it can't be replayed on another tunnel subdomain.
+    expect(setCookie).toContain(`Domain=.${AUTH_ID}.${DOMAIN}`);
+    expect(setCookie).toContain('__volter_auth=');
+  });
 });
 
 describe('Basic-auth gate (#6)', () => {

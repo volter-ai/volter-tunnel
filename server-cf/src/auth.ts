@@ -274,8 +274,12 @@ export function buildResponseHeaders(
   return out;
 }
 
-export function cookieFor(token: string, domain: string): string {
-  return `__volter_auth=${token}; Domain=.${domain}; HttpOnly; SameSite=None; Secure; Path=/; Max-Age=3600`;
+/** Build the auth cookie. `cookieDomain` is the host the cookie is scoped to —
+ *  pass `<tunnelId>.<domain>` to isolate one tunnel (the leading dot still covers
+ *  its `*.<tunnelId>.<domain>` wildcard subdomains, but NOT other tunnels), or the
+ *  bare apex `<domain>` for the legacy shared-SSO scope. */
+export function cookieFor(token: string, cookieDomain: string): string {
+  return `__volter_auth=${token}; Domain=.${cookieDomain}; HttpOnly; SameSite=None; Secure; Path=/; Max-Age=3600`;
 }
 
 /** GET /__volter_auth?__volter_token=<jwt> → set the cross-iframe auth cookie. */
@@ -292,11 +296,16 @@ export async function handleCookieBootstrap(
   if (!token || !env.JWT_SECRET) {
     return Response.json({ error: 'Missing token parameter' }, { status: 400, headers: cors });
   }
-  if (!(await verify(token, env.JWT_SECRET))) {
+  const payload = await verifyToken(token, env.JWT_SECRET);
+  if (!payload) {
     return Response.json({ error: 'Invalid token' }, { status: 401, headers: cors });
   }
+  // A tunnel-bound token scopes its cookie to that tunnel; an unbound token keeps
+  // the apex scope (legacy shared SSO).
+  const tid = typeof payload.tid === 'string' ? payload.tid : undefined;
+  const cookieDomain = tid ? `${tid}.${env.TUNNEL_DOMAIN}` : env.TUNNEL_DOMAIN;
   return Response.json(
     { ok: true },
-    { status: 200, headers: { ...cors, 'set-cookie': cookieFor(token, env.TUNNEL_DOMAIN) } }
+    { status: 200, headers: { ...cors, 'set-cookie': cookieFor(token, cookieDomain) } }
   );
 }
