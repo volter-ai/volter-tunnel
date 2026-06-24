@@ -16,15 +16,43 @@ export interface Env extends MeteringEnv {
    *  (full per-tunnel isolation). Default: a JWT with a `tid` is still bound to
    *  that tunnel, but a JWT without one is accepted on any tunnel (shared SSO). */
   REQUIRE_TID?: string;
+  /** Idle days before a reserved tunnelId may be reclaimed by another account on
+   *  contention (DECISIONS D5). Default 60. */
+  RESERVATION_IDLE_TTL_DAYS?: string;
+  /** Optional JSON response-header rewrite rules, applied on top of the built-in
+   *  iframe strip: `{"set":{"x-foo":"bar"},"remove":["x-baz"]}`. */
+  RESPONSE_HEADER_RULES?: string;
+  /** Per-tunnel request-rate burst limit (#4): sustained requests/sec. 0/unset =
+   *  disabled. The daily/monthly credit caps remain the primary fair-use limit. */
+  BURST_RPS?: string;
+  /** Token-bucket capacity for BURST_RPS (max instantaneous burst). Default 2×RPS. */
+  BURST_SIZE?: string;
+  /** Inspector replay + persisted history (#10): 'true'/'1' captures request
+   *  detail to DO storage (survives hibernation) and enables /__volter_replay. */
+  INSPECT_REPLAY?: string;
+  /** Max captured requests retained for replay (default 50). */
+  INSPECT_MAX?: string;
+  /** Max captured request-body bytes stored per request (default 65536). */
+  INSPECT_BODY_MAX?: string;
 }
 
-/** Extract the tunnelId from a Host header: `<id>.<domain>` → `<id>`. Port-tolerant. */
+/**
+ * Extract the tunnelId from a Host header. Port-tolerant.
+ *
+ * `<id>.<domain>` → `<id>`, and — wildcard support (P1 #9) — `*.<id>.<domain>`
+ * also → `<id>`: every label under a reserved id routes to that id's tunnel.
+ * Tunnel ids are single DNS labels (no dots), so the id is always the label
+ * adjacent to the base domain (the rightmost label of the subdomain portion);
+ * the leading labels are the wildcard prefix, left intact on the forwarded Host
+ * so the tunneled app can sub-route on them.
+ */
 export function getTunnelIdFromHost(host: string | null, domain: string): string | null {
   if (!host) return null;
   const hostname = host.split(':')[0];
   const suffix = '.' + domain;
   if (hostname.endsWith(suffix)) {
-    return hostname.slice(0, -suffix.length);
+    const sub = hostname.slice(0, -suffix.length);
+    return sub.slice(sub.lastIndexOf('.') + 1) || null;
   }
   return null;
 }
@@ -160,15 +188,53 @@ export function corsHeaders(request: Request): Record<string, string> {
   };
 }
 
+/** Operator-configurable response-header rewrite rules, applied on top of the
+ *  built-in iframe strip. Keys are lower-cased to match Workers' header casing. */
+export interface HeaderRules {
+  /** Force-set these response headers (override whatever downstream returned). */
+  set?: Record<string, string>;
+  /** Remove these response headers. */
+  remove?: string[];
+}
+
+/** Parse RESPONSE_HEADER_RULES (JSON) into HeaderRules. Tolerant: malformed JSON
+ *  or unexpected shape yields no extra rules — the built-in iframe strip always
+ *  still applies, so a bad config can never un-strip frame-ancestors. */
+export function parseHeaderRules(raw: string | undefined): HeaderRules {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as { set?: unknown; remove?: unknown };
+    const rules: HeaderRules = {};
+    if (parsed && typeof parsed.set === 'object' && parsed.set) {
+      const set: Record<string, string> = {};
+      for (const [k, v] of Object.entries(parsed.set as Record<string, unknown>)) {
+        if (typeof v === 'string') set[k.toLowerCase()] = v;
+      }
+      if (Object.keys(set).length) rules.set = set;
+    }
+    if (Array.isArray(parsed.remove)) {
+      const remove = (parsed.remove as unknown[])
+        .filter((x): x is string => typeof x === 'string')
+        .map((x) => x.toLowerCase());
+      if (remove.length) rules.remove = remove;
+    }
+    return rules;
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Build the downstream response headers: drop hop-by-hop + downstream CORS,
- * strip CSP frame-ancestors / X-Frame-Options, then re-apply our CORS + cookie.
- * Mirrors server/server.mjs response handling.
+ * strip CSP frame-ancestors / X-Frame-Options (the built-in iframe embedding —
+ * always on), apply any operator-configured `rules`, then re-apply our CORS +
+ * cookie. Mirrors server/server.mjs response handling.
  */
 export function buildResponseHeaders(
   downstream: Record<string, string>,
   request: Request,
-  bootstrapCookie: string | null
+  bootstrapCookie: string | null,
+  rules?: HeaderRules
 ): Headers {
   const headers = { ...downstream };
   for (const k of [
@@ -193,6 +259,11 @@ export function buildResponseHeaders(
     }
   }
   delete headers['x-frame-options'];
+
+  // Operator-configured rewrite rules, on top of the built-in strip. Remove
+  // before set so a rule can both clear and re-set the same header deliberately.
+  if (rules?.remove) for (const k of rules.remove) delete headers[k];
+  if (rules?.set) for (const [k, v] of Object.entries(rules.set)) headers[k] = v;
 
   const out = new Headers();
   for (const [k, v] of Object.entries(headers)) {

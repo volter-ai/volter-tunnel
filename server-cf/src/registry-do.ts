@@ -39,7 +39,18 @@ interface DirEntry {
   monthLimit: number;
   concurrentMax: number;
   leaseChunk: number;
+  reservedMax: number;
 }
+
+/** A user-submitted abuse report against a tunnel (#3). */
+interface Report {
+  tunnelId: string;
+  reason: string;
+  at: string;
+}
+
+/** Max abuse reports retained (operators review then act / revoke). */
+const REPORTS_CAP = 200;
 
 type Auth = { kind: 'root' } | { kind: 'service'; slug: string } | null;
 
@@ -55,6 +66,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
   private rootHash: string | null = null;
   private accounts = new Map<string, DirEntry>();
   private tokens = new Map<string, TokenRecord>();
+  private reports: Report[] = [];
   private loaded: Promise<void>;
 
   constructor(ctx: DurableObjectState, env: MeteringEnv) {
@@ -62,6 +74,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     this.loaded = ctx.blockConcurrencyWhile(async () => {
       this.accounts = new Map(Object.entries((await ctx.storage.get<Record<string, DirEntry>>('accounts')) ?? {}));
       this.tokens = new Map(Object.entries((await ctx.storage.get<Record<string, TokenRecord>>('tokens')) ?? {}));
+      this.reports = (await ctx.storage.get<Report[]>('reports')) ?? [];
     });
   }
 
@@ -131,6 +144,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       monthLimit: e.monthLimit,
       concurrentMax: e.concurrentMax,
       leaseChunk: e.leaseChunk,
+      reservedMax: e.reservedMax ?? envNum(this.env.DEFAULT_RESERVED_MAX, 3),
     };
   }
 
@@ -205,11 +219,48 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       return this.reserveInternal((await request.json().catch(() => ({}))) as Record<string, unknown>);
     }
 
+    // Self-serve signup (#2) — unauthenticated; identity is proven via GitHub.
+    if (url.pathname.startsWith('/signup/')) {
+      if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
+      const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+      switch (url.pathname) {
+        case '/signup/github':
+          return this.signupGithubToken(body);
+        case '/signup/github/gist/start':
+          return this.gistStart();
+        case '/signup/github/gist/verify':
+          return this.gistVerify(body);
+        default:
+          return json({ error: 'not found' }, 404);
+      }
+    }
+
+    // Public abuse report (#3) — unauthenticated; anyone can flag a tunnel.
+    if (url.pathname === '/report') {
+      if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
+      return this.addReport((await request.json().catch(() => ({}))) as Record<string, unknown>);
+    }
+
     // Fleet usage summary (root): every account's live usage + dollars in one call.
     if (parts[0] === 'admin' && parts[1] === 'usage' && request.method === 'GET') {
       const auth = await this.authenticate(request);
       if (auth?.kind !== 'root') return json({ error: 'root token required' }, 403);
       return json(await this.usageSummary());
+    }
+
+    // Operator review of abuse reports (root).
+    if (parts[0] === 'admin' && parts[1] === 'reports' && request.method === 'GET') {
+      const auth = await this.authenticate(request);
+      if (auth?.kind !== 'root') return json({ error: 'root token required' }, 403);
+      return json({ reports: this.reports });
+    }
+
+    // Revoke a reserved handle (#3, root): DELETE /admin/reservations/:tunnelId.
+    if (parts[0] === 'admin' && parts[1] === 'reservations' && parts[2]) {
+      const auth = await this.authenticate(request);
+      if (auth?.kind !== 'root') return json({ error: 'root token required' }, 403);
+      if (request.method !== 'DELETE') return json({ error: 'method not allowed' }, 405);
+      return this.revokeReservationForward(parts[2]);
     }
 
     if (parts[0] !== 'admin' || parts[1] !== 'accounts') {
@@ -263,6 +314,176 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     }
   }
 
+  // ── signup (#2) ────────────────────────────────────────────────────────────────
+  private githubBase(): string {
+    return (this.env.GITHUB_API_BASE || 'https://api.github.com').replace(/\/$/, '');
+  }
+
+  /** Verify a GitHub token by asking the API who it belongs to. The token is used
+   *  here and nowhere else — never stored or logged. */
+  private async githubUser(token: string): Promise<{ id: number; login: string } | null> {
+    try {
+      const r = await fetch(`${this.githubBase()}/user`, {
+        headers: {
+          authorization: `Bearer ${token}`,
+          'user-agent': 'volter-tunnel',
+          accept: 'application/vnd.github+json',
+        },
+      });
+      if (!r.ok) return null;
+      const u = (await r.json()) as { id?: number; login?: string };
+      return u && typeof u.id === 'number' && u.login ? { id: u.id, login: u.login } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Provision a free-tier account for a slug if absent. Returns false if the
+   *  global ceiling has no room. */
+  private async provisionAccount(slug: string, name: string): Promise<boolean> {
+    if (this.accounts.has(slug)) return true;
+    const dayLimit = envNum(this.env.SIGNUP_DAY_LIMIT, 1000);
+    const monthLimit = envNum(this.env.SIGNUP_MONTH_LIMIT, 20_000);
+    if (!this.fitsGlobal(slug, dayLimit, monthLimit)) return false;
+    this.accounts.set(slug, {
+      name,
+      status: 'active',
+      dayLimit,
+      monthLimit,
+      concurrentMax: envNum(this.env.DEFAULT_CONCURRENT, 100),
+      leaseChunk: envNum(this.env.DEFAULT_LEASE_CHUNK, 50),
+      reservedMax: envNum(this.env.DEFAULT_RESERVED_MAX, 3),
+    });
+    await this.persistAccounts();
+    return true;
+  }
+
+  /** Whether a GitHub login may sign up. Empty/unset allowlist = open signup;
+   *  a set allowlist restricts to those logins (case-insensitive). Gates account
+   *  creation only — existing secrets/tokens are unaffected. */
+  private signupAllowed(login: string): boolean {
+    const raw = this.env.SIGNUP_ALLOWED_USERS;
+    if (!raw || !raw.trim()) return true;
+    const allow = raw
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    return allow.includes(login.toLowerCase());
+  }
+
+  /** Resolve a verified GitHub identity to an account + a fresh CLI api token.
+   *  Logging in again rotates the prior github-cli token so creds don't pile up. */
+  private async finalizeSignup(githubId: number, login: string): Promise<Response> {
+    if (!this.signupAllowed(login)) {
+      return json({ error: `signup not permitted for github:${login}` }, 403);
+    }
+    const slug = `gh-${githubId}`;
+    if (!(await this.provisionAccount(slug, `github:${login}`))) {
+      return json({ error: 'at capacity — global ceiling reached' }, 503);
+    }
+    let rotated = false;
+    for (const rec of this.tokens.values()) {
+      if (rec.slug === slug && rec.kind === 'api' && rec.label === 'github-cli' && !rec.revokedAt) {
+        rec.revokedAt = new Date().toISOString();
+        rotated = true;
+      }
+    }
+    if (rotated) await this.persistTokens();
+    const minted = await this.mint(slug, 'api', 'github-cli');
+    await this.pushConfig(slug);
+    return json({ slug, login, token: minted.token }, 200);
+  }
+
+  private async signupGithubToken(body: Record<string, unknown>): Promise<Response> {
+    const token = String(body.token ?? '');
+    if (!token) return json({ error: 'missing token' }, 400);
+    const user = await this.githubUser(token);
+    if (!user) return json({ error: 'github verification failed' }, 401);
+    return this.finalizeSignup(user.id, user.login);
+  }
+
+  // ── gist-proof signup: prove GitHub ownership without sending us any token ─────
+  private nonceSecret(): string {
+    return this.env.SIGNUP_NONCE_SECRET || this.env.ROOT_TOKEN || 'volter-signup';
+  }
+  private async hmacHex(input: string): Promise<string> {
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(this.nonceSecret()),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(input));
+    return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  /** Issue a signed, self-expiring nonce — stateless (no server storage). */
+  private async gistStart(): Promise<Response> {
+    const payload = `${randomBase62(24)}.${Date.now() + 10 * 60_000}`;
+    const nonce = `volter-verify-${payload}.${await this.hmacHex(payload)}`;
+    return json({
+      nonce,
+      instructions:
+        'Create a PUBLIC gist whose content is exactly this nonce, then POST { gistId } to /signup/github/gist/verify.',
+    });
+  }
+  private async validNonce(nonce: string): Promise<boolean> {
+    const m = /^volter-verify-(.+)\.([0-9a-f]{64})$/.exec(nonce);
+    if (!m) return false;
+    const [, payload, sig] = m;
+    if (!safeEqualHex(await this.hmacHex(payload!), sig!)) return false;
+    const exp = Number(payload!.split('.')[1]);
+    return Number.isFinite(exp) && Date.now() < exp;
+  }
+  private async gistVerify(body: Record<string, unknown>): Promise<Response> {
+    const gistId = String(body.gistId ?? '');
+    if (!gistId) return json({ error: 'missing gistId' }, 400);
+    let gist: { owner?: { id?: number; login?: string }; files?: Record<string, { content?: string }> };
+    try {
+      const r = await fetch(`${this.githubBase()}/gists/${encodeURIComponent(gistId)}`, {
+        headers: { 'user-agent': 'volter-tunnel', accept: 'application/vnd.github+json' },
+      });
+      if (!r.ok) return json({ error: 'gist not found' }, 404);
+      gist = (await r.json()) as typeof gist;
+    } catch {
+      return json({ error: 'github unreachable' }, 502);
+    }
+    const owner = gist.owner;
+    if (!owner || typeof owner.id !== 'number' || !owner.login) {
+      return json({ error: 'gist has no owner' }, 401);
+    }
+    const contents = Object.values(gist.files ?? {}).map((f) => (f?.content ?? '').trim());
+    let ok = false;
+    for (const c of contents) if (await this.validNonce(c)) ok = true;
+    if (!ok) return json({ error: 'no valid verification nonce in gist' }, 401);
+    return this.finalizeSignup(owner.id, owner.login);
+  }
+
+  // ── abuse controls (#3) ──────────────────────────────────────────────────────
+  private async addReport(body: Record<string, unknown>): Promise<Response> {
+    const tunnelId = String(body.tunnelId ?? '').trim();
+    if (!tunnelId) return json({ error: 'missing tunnelId' }, 400);
+    const reason = String(body.reason ?? '').slice(0, 500);
+    this.reports.push({ tunnelId, reason, at: new Date().toISOString() });
+    if (this.reports.length > REPORTS_CAP) this.reports.splice(0, this.reports.length - REPORTS_CAP);
+    await this.ctx.storage.put('reports', this.reports);
+    return json({ ok: true });
+  }
+
+  /** Revoke a reserved handle by routing to its TunnelDO (which clears the
+   *  reservation, releases the account slot, and disconnects any live client).
+   *  Forwards the root token so the TunnelDO's internal endpoint accepts it. */
+  private async revokeReservationForward(tunnelId: string): Promise<Response> {
+    if (!this.env.TUNNEL) return json({ error: 'tunnel binding unavailable' }, 500);
+    const id = this.env.TUNNEL.idFromName(tunnelId);
+    const r = await this.env.TUNNEL.get(id).fetch('https://tunnel/__internal/revoke-reservation', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${this.env.ROOT_TOKEN ?? ''}` },
+    });
+    const data = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+    return json({ tunnelId, ...data }, r.status);
+  }
+
   // ── handlers ──────────────────────────────────────────────────────────────────
   private async reserveInternal(body: Record<string, unknown>): Promise<Response> {
     const slug = String(body.slug ?? '');
@@ -275,6 +496,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
         monthLimit: Number(body.monthLimit ?? 0),
         concurrentMax: envNum(this.env.INTERNAL_CONCURRENT, 1000),
         leaseChunk: envNum(this.env.DEFAULT_LEASE_CHUNK, 50),
+        reservedMax: envNum(this.env.INTERNAL_RESERVED_MAX, 1_000_000),
       });
       await this.persistAccounts();
     }
@@ -303,6 +525,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       monthLimit,
       concurrentMax: envNum(body.concurrentMax as string | undefined, envNum(this.env.DEFAULT_CONCURRENT, 100)),
       leaseChunk: envNum(body.leaseChunk as string | undefined, envNum(this.env.DEFAULT_LEASE_CHUNK, 50)),
+      reservedMax: envNum(body.reservedMax as string | undefined, envNum(this.env.DEFAULT_RESERVED_MAX, 3)),
     };
     this.accounts.set(slug, entry);
     await this.persistAccounts();
@@ -396,6 +619,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     e.monthLimit = monthLimit;
     if (body.concurrentMax !== undefined) e.concurrentMax = Number(body.concurrentMax);
     if (body.leaseChunk !== undefined) e.leaseChunk = Number(body.leaseChunk);
+    if (body.reservedMax !== undefined) e.reservedMax = Number(body.reservedMax);
     this.accounts.set(slug, e);
     await this.persistAccounts();
     await this.pushConfig(slug);

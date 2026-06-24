@@ -152,6 +152,46 @@ test('forwards an HTTP GET to the origin and relays the response', async () => {
   expect(res.body).toBe('hello from origin');
 });
 
+test('wildcard subdomains under a reserved id route to that tunnel (P1 #9)', async () => {
+  const one = await requestViaTunnel(relayPort, TUNNEL_ID, {
+    path: '/hello',
+    headers: { Host: `preview.${TUNNEL_ID}.${DOMAIN}` },
+  });
+  expect(one.status).toBe(200);
+  expect(one.body).toBe('hello from origin');
+
+  const deep = await requestViaTunnel(relayPort, TUNNEL_ID, {
+    path: '/hello',
+    headers: { Host: `a.b.${TUNNEL_ID}.${DOMAIN}` },
+  });
+  expect(deep.status).toBe(200);
+  expect(deep.body).toBe('hello from origin');
+});
+
+test('the live inspector records recent request metadata (P1 #5)', async () => {
+  await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/hello' });
+  await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/nope' }); // 404
+
+  const res = await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/__volter_inspect' });
+  expect(res.status).toBe(200);
+  const data = JSON.parse(res.body) as {
+    tunnelId: string;
+    entries: Array<{ method: string; path: string; status: number | null; ms: number | null }>;
+  };
+  expect(data.tunnelId).toBe(TUNNEL_ID);
+
+  const hello = data.entries.find((e) => e.path === '/hello');
+  expect(hello?.method).toBe('GET');
+  expect(hello?.status).toBe(200);
+  expect(typeof hello?.ms).toBe('number');
+
+  const nope = data.entries.find((e) => e.path === '/nope');
+  expect(nope?.status).toBe(404);
+
+  // The inspector endpoint itself must not appear in the buffer.
+  expect(data.entries.some((e) => e.path === '/__volter_inspect')).toBe(false);
+});
+
 test('forwards a POST body and relays the echoed response', async () => {
   const res = await requestViaTunnel(relayPort, TUNNEL_ID, {
     path: '/echo',
@@ -255,5 +295,53 @@ describe('JWT auth (authRequired tunnel)', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(res.status).toBe(401);
+  });
+});
+
+describe('Basic-auth gate (#6)', () => {
+  let baTunnel: TunnelHandle;
+
+  beforeAll(async () => {
+    baTunnel = await createTunnel({
+      port: originPort,
+      host: `http://127.0.0.1:${relayPort}`,
+      tunnelId: 'cfbasic',
+      secret: SECRET,
+      authRequired: false,
+      basicAuth: { user: 'admin', pass: 's3cret' },
+      logger: NO_LOG,
+    });
+  }, 15000);
+
+  afterAll(() => {
+    try {
+      baTunnel?.close();
+    } catch {
+      /* ignore */
+    }
+  });
+
+  test('rejects a request with no credentials (401)', async () => {
+    const res = await requestViaTunnel(relayPort, 'cfbasic', { path: '/hello' });
+    expect(res.status).toBe(401);
+  });
+
+  test('rejects wrong credentials (401)', async () => {
+    const bad = Buffer.from('admin:nope').toString('base64');
+    const res = await requestViaTunnel(relayPort, 'cfbasic', {
+      path: '/hello',
+      headers: { Authorization: `Basic ${bad}` },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test('allows correct credentials (200)', async () => {
+    const good = Buffer.from('admin:s3cret').toString('base64');
+    const res = await requestViaTunnel(relayPort, 'cfbasic', {
+      path: '/hello',
+      headers: { Authorization: `Basic ${good}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toBe('hello from origin');
   });
 });

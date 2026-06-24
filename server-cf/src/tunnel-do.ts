@@ -15,16 +15,19 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
   type Env,
+  type HeaderRules,
   buildResponseHeaders,
   cookieFor,
   corsHeaders,
+  parseHeaderRules,
   stripAuthCookie,
   stripTokenParam,
   validateAuth,
   validateWsAuth,
 } from './auth';
 import { CREDIT_WEIGHTS, hashToken, parseToken, type UsageDelta } from './credits';
-import type { AuthorizeResult, LeaseResult, RateSnapshot } from './metering-types';
+import { burstStep, envNum, reservationDecision } from './metering-types';
+import type { AuthorizeResult, BurstState, LeaseResult, RateSnapshot, Reservation } from './metering-types';
 
 interface CtlAttach {
   role: 'ctl';
@@ -43,6 +46,8 @@ interface CtlAttach {
   /** Re-authorize inputs (so a reaped-but-live tunnel can re-register its entry). */
   legacy?: boolean;
   tokenHash?: string;
+  /** SHA-256 of "user:pass" when the tunnel is gated by HTTP Basic Auth (#6). */
+  basicAuthHash?: string;
 }
 interface BrowserAttach {
   role: 'browser';
@@ -67,9 +72,34 @@ interface PendingUpgrade {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/** One captured request for the live inspector (#5). Metadata only — no bodies
+ *  or headers; persistence/replay is the paid #10. In-memory, so the buffer is
+ *  lost on hibernation (fine for a live view of an actively-used tunnel). */
+interface InspectEntry {
+  id: string;
+  t: number;
+  method: string;
+  path: string;
+  status: number | null;
+  ms: number | null;
+  bytes: number | null;
+}
+
+/** A captured request stored for replay (#10). Body is base64, size-capped. */
+interface Capture {
+  method: string;
+  path: string;
+  headers: Record<string, string>;
+  body: string | null;
+  at: number;
+}
+
 /** Charge relayed messages (stream chunks / WS frames) in batches of this many,
  *  keeping the per-frame path cheap. Caps unmetered overshoot at one batch. */
 const MSG_FLUSH_EVERY = 32;
+
+/** Max requests retained in the live inspector ring (#5). */
+const INSPECT_CAP = 50;
 
 function b64encode(bytes: Uint8Array): string {
   let s = '';
@@ -115,6 +145,79 @@ export class TunnelDO extends DurableObject<Env> {
   private pendingHttp = new Map<string, PendingHttp>();
   private streaming = new Map<string, Streaming>();
   private pendingUpgrades = new Map<string, PendingUpgrade>();
+
+  /** Operator response-header rewrite rules (parsed once from env). */
+  private _headerRules: HeaderRules | null = null;
+  private get headerRules(): HeaderRules {
+    return (this._headerRules ??= parseHeaderRules(this.env.RESPONSE_HEADER_RULES));
+  }
+
+  /** Per-tunnel request-rate burst limiter state (#4; in-memory, resets on
+   *  hibernation — lenient, it only bounds bursts while the DO is resident). */
+  private burst: BurstState = { tokens: 0, last: 0, init: false };
+
+  /** Live request inspector ring (#5; in-memory, persisted to storage when
+   *  INSPECT_REPLAY is on so it survives hibernation — #10). */
+  private inspect: InspectEntry[] = [];
+  private inspectByReq = new Map<string, InspectEntry>();
+  /** Captured requests for replay (#10), keyed by reqId. Persisted when enabled. */
+  private captures = new Map<string, Capture>();
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    // Only touch storage when replay/persistence is on — otherwise the inspector
+    // is purely in-memory (#5) and a cold DO does no extra reads.
+    if (env.INSPECT_REPLAY === 'true' || env.INSPECT_REPLAY === '1') {
+      ctx.blockConcurrencyWhile(async () => {
+        this.inspect = (await ctx.storage.get<InspectEntry[]>('inspect')) ?? [];
+        const caps = (await ctx.storage.get<Record<string, Capture>>('captures')) ?? {};
+        this.captures = new Map(Object.entries(caps));
+      });
+    }
+  }
+
+  private get replayEnabled(): boolean {
+    return this.env.INSPECT_REPLAY === 'true' || this.env.INSPECT_REPLAY === '1';
+  }
+
+  /** Record a request as it starts; trims the ring to its cap. */
+  private pushInspect(reqId: string, method: string, path: string): void {
+    const e: InspectEntry = { id: reqId, t: Date.now(), method, path, status: null, ms: null, bytes: null };
+    this.inspect.push(e);
+    const cap = envNum(this.env.INSPECT_MAX, INSPECT_CAP);
+    while (this.inspect.length > cap) this.inspect.shift();
+    this.inspectByReq.set(reqId, e);
+  }
+  /** Fill in a request's outcome (status, latency, response size) on completion. */
+  private finishInspect(reqId: string, status: number, bytes: number | null): void {
+    const e = this.inspectByReq.get(reqId);
+    if (!e) return;
+    e.status = status;
+    e.ms = Date.now() - e.t;
+    e.bytes = bytes;
+    this.inspectByReq.delete(reqId);
+    if (this.replayEnabled) void this.ctx.storage.put('inspect', this.inspect).catch(() => {});
+  }
+
+  /** Persist a captured request for later replay (#10), trimming to INSPECT_MAX. */
+  private async captureForReplay(
+    id: string,
+    method: string,
+    path: string,
+    headers: Record<string, string>,
+    bodyBytes: Uint8Array | null
+  ): Promise<void> {
+    const maxBody = envNum(this.env.INSPECT_BODY_MAX, 65536);
+    const body = bodyBytes && bodyBytes.length && bodyBytes.length <= maxBody ? b64encode(bodyBytes) : null;
+    this.captures.set(id, { method, path, headers, body, at: Date.now() });
+    const cap = envNum(this.env.INSPECT_MAX, INSPECT_CAP);
+    while (this.captures.size > cap) {
+      const oldest = this.captures.keys().next().value;
+      if (oldest === undefined) break;
+      this.captures.delete(oldest);
+    }
+    await this.ctx.storage.put('captures', Object.fromEntries(this.captures));
+  }
 
   // ── metering state (ephemeral; safe to lose on hibernation) ────────────────
   /** Credits leased from the account but not yet spent. */
@@ -307,6 +410,17 @@ export class TunnelDO extends DurableObject<Env> {
     const url = new URL(request.url);
     const upgrade = request.headers.get('Upgrade');
 
+    // Internal admin: revoke this tunnelId's reservation (#3). Reached only via a
+    // DO-to-DO call from the RegistryDO after it has authenticated root; gated by
+    // the root token so a browser hitting this path on the tunnel host can't.
+    if (url.pathname === '/__internal/revoke-reservation') {
+      const bearer = (request.headers.get('authorization') || '').replace(/^Bearer /, '');
+      if (!this.env.ROOT_TOKEN || !safeEqual(bearer, this.env.ROOT_TOKEN)) {
+        return new Response('forbidden', { status: 403 });
+      }
+      return this.revokeReservation();
+    }
+
     // Control channel: the tunnel client connects to /ws?id=<tunnelId>.
     if (url.pathname === '/ws') {
       if (upgrade !== 'websocket') return new Response('expected websocket', { status: 426 });
@@ -318,6 +432,24 @@ export class TunnelDO extends DurableObject<Env> {
 
     // Plain HTTP data request.
     return this.handleHttpRequest(request, url);
+  }
+
+  /** Revoke this tunnelId's reservation (#3): release the slot on the owner's
+   *  account, clear the persistent record, and disconnect any live client. */
+  private async revokeReservation(): Promise<Response> {
+    const res = await this.ctx.storage.get<Reservation>('reservation');
+    if (res?.tunnelId) {
+      await this.accountRpc('/release-id', { tunnelId: res.tunnelId }, res.ownerSlug);
+    }
+    await this.ctx.storage.delete('reservation');
+    for (const w of this.ctx.getWebSockets('ctl')) {
+      try {
+        (w as WebSocket).close(4010, 'Reservation revoked');
+      } catch {
+        /* already gone */
+      }
+    }
+    return Response.json({ ok: true, revoked: !!res, slug: res?.ownerSlug ?? null });
   }
 
   // ── control socket helpers ────────────────────────────────────────────────
@@ -342,8 +474,25 @@ export class TunnelDO extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  /** Validate an Authorization: Basic header against the stored "user:pass" hash
+   *  (#6). Constant-time on the hash; returns false on any missing/malformed input. */
+  private async checkBasicAuth(request: Request, expectedHash: string): Promise<boolean> {
+    const h = request.headers.get('authorization');
+    if (!h || !h.startsWith('Basic ')) return false;
+    let decoded: string;
+    try {
+      decoded = atob(h.slice(6).trim());
+    } catch {
+      return false;
+    }
+    return safeEqual(await hashToken(decoded), expectedHash);
+  }
+
   // ── inbound HTTP ──────────────────────────────────────────────────────────
-  private async handleHttpRequest(request: Request, url: URL): Promise<Response> {
+  // `isReplay` (#10) marks an internally re-issued capture: it has already been
+  // authorized via the auth-gated /__volter_replay endpoint, so it skips the
+  // burst/auth/endpoint preamble and goes straight to meter + forward.
+  private async handleHttpRequest(request: Request, url: URL, isReplay = false): Promise<Response> {
     // Answer CORS preflight BEFORE the connectivity check (mirrors server.mjs) so
     // a momentarily-down tunnel doesn't surface a CORS error to the browser.
     if (request.method === 'OPTIONS') {
@@ -355,8 +504,34 @@ export class TunnelDO extends DurableObject<Env> {
       return new Response('Tunnel not connected', { status: 502, headers: corsHeaders(request) });
     }
 
+    // Per-tunnel request-rate burst limit (#4) — cheap flood guard ahead of auth
+    // and forwarding. The daily/monthly credit caps remain the primary limit.
+    const rps = envNum(this.env.BURST_RPS, 0);
+    if (!isReplay && rps > 0) {
+      const retry = burstStep(this.burst, Date.now(), rps, envNum(this.env.BURST_SIZE, rps * 2));
+      if (retry > 0) {
+        return new Response('Too Many Requests', {
+          status: 429,
+          headers: { ...corsHeaders(request), 'retry-after': String(retry) },
+        });
+      }
+    }
+
+    // Basic-auth gate (#6): if the tunnel was registered with credentials, every
+    // inbound request must present a matching Authorization: Basic header before
+    // anything is served or forwarded (independent of the JWT layer below).
+    if (!isReplay && attach.basicAuthHash && !(await this.checkBasicAuth(request, attach.basicAuthHash))) {
+      return new Response('Authentication required', {
+        status: 401,
+        headers: {
+          ...corsHeaders(request),
+          'www-authenticate': 'Basic realm="volter-tunnel"',
+        },
+      });
+    }
+
     let bootstrapCookie: string | null = null;
-    if (attach.authRequired && this.env.JWT_SECRET) {
+    if (!isReplay && attach.authRequired && this.env.JWT_SECRET) {
       const auth = await validateAuth(request, url, this.env.JWT_SECRET, {
         tunnelId: attach.tunnelId,
         requireTid: this.env.REQUIRE_TID === 'true',
@@ -368,6 +543,35 @@ export class TunnelDO extends DurableObject<Env> {
         );
       }
       if (auth.source === 'query') bootstrapCookie = cookieFor(auth.token, this.env.TUNNEL_DOMAIN);
+    }
+
+    // Live request inspector (#5): recent request metadata, served on a reserved
+    // path (never forwarded) and gated by the same auth as the tunnel above.
+    if (!isReplay && url.pathname === '/__volter_inspect') {
+      return Response.json(
+        { tunnelId: attach.tunnelId, entries: this.inspect, replay: this.replayEnabled },
+        { headers: corsHeaders(request) }
+      );
+    }
+
+    // Replay a captured request (#10): re-issue it through the tunnel. Gated by
+    // the same auth above; only available when INSPECT_REPLAY is enabled.
+    if (!isReplay && url.pathname === '/__volter_replay' && request.method === 'POST') {
+      if (!this.replayEnabled) {
+        return Response.json({ error: 'replay not enabled' }, { status: 404, headers: corsHeaders(request) });
+      }
+      const b = (await request.json().catch(() => ({}))) as { id?: string };
+      const cap = b.id ? this.captures.get(b.id) : undefined;
+      if (!cap) {
+        return Response.json({ error: 'no such captured request' }, { status: 404, headers: corsHeaders(request) });
+      }
+      const replayUrl = new URL(`https://${attach.tunnelId}.${this.env.TUNNEL_DOMAIN}${cap.path}`);
+      const synth = new Request(replayUrl.toString(), {
+        method: cap.method,
+        headers: cap.headers,
+        body: cap.body ? b64decode(cap.body) : undefined,
+      });
+      return this.handleHttpRequest(synth, replayUrl, true);
     }
 
     const forwardPath = stripTokenParam(url.pathname + url.search);
@@ -406,10 +610,15 @@ export class TunnelDO extends DurableObject<Env> {
     const rateHeaders = this.rateHeaders();
 
     const reqId = crypto.randomUUID();
+    this.pushInspect(reqId, request.method, url.pathname);
+    if (!isReplay && this.replayEnabled) {
+      await this.captureForReplay(reqId, request.method, forwardPath, forwardHeaders, bodyBytes);
+    }
     return await new Promise<Response>((resolve) => {
       const timer = setTimeout(() => {
         this.pendingHttp.delete(reqId);
         this.streaming.delete(reqId);
+        this.finishInspect(reqId, 504, null);
         resolve(new Response('Tunnel timeout', { status: 504, headers: corsHeaders(request) }));
       }, 30000);
       this.pendingHttp.set(reqId, { resolve, timer, request, bootstrapCookie, rate: rateHeaders });
@@ -582,6 +791,17 @@ export class TunnelDO extends DurableObject<Env> {
       );
       this.consumedSinceCommit = 0;
       this.budget = 0;
+
+      // Idle clock starts now: stamp lastSeenAt at disconnect so the reclaim TTL
+      // counts from when the owner went away, not from when it first connected
+      // (DECISIONS D5). Only the current owner may move its own clock.
+      const res = await this.ctx.storage.get<Reservation>('reservation');
+      if (res && res.ownerSlug === attach.slug) {
+        await this.ctx.storage.put('reservation', {
+          ...res,
+          lastSeenAt: Date.now(),
+        } satisfies Reservation);
+      }
     }
 
     // Control socket gone → tear down EVERYTHING for this tunnel (mirrors
@@ -595,8 +815,9 @@ export class TunnelDO extends DurableObject<Env> {
         /* ignore */
       }
     }
-    for (const [, p] of this.pendingHttp) {
+    for (const [rid, p] of this.pendingHttp) {
       clearTimeout(p.timer);
+      this.finishInspect(rid, 502, null);
       try {
         p.resolve(new Response('Tunnel disconnected', { status: 502 }));
       } catch {
@@ -676,6 +897,26 @@ export class TunnelDO extends DurableObject<Env> {
         return;
       }
 
+      // ── reserved-id ownership: lazy reclaim-on-contention (DECISIONS D5) ──────
+      // This DO *is* the tunnelId, so a single 'reservation' record is its owner.
+      // A different account may take a reserved id only once the current owner has
+      // been idle past RESERVATION_IDLE_TTL_DAYS; while the owner is active a
+      // foreign claim is refused so the id stays stable. lastSeenAt is refreshed
+      // on (re)register (below, after authorize) and on disconnect.
+      const ttlMs = envNum(this.env.RESERVATION_IDLE_TTL_DAYS, 60) * 86_400_000;
+      const reservation = await this.ctx.storage.get<Reservation>('reservation');
+      const verdict = reservationDecision(reservation, slug, Date.now(), ttlMs);
+      if (verdict === 'reject') {
+        ws.send(
+          JSON.stringify({
+            type: 'error',
+            message: `Tunnel ID '${String(msg.tunnelId ?? '')}' is reserved by another account.`,
+          })
+        );
+        ws.close(4002, 'Tunnel ID reserved');
+        return;
+      }
+
       const others = this.ctx
         .getWebSockets('ctl')
         .filter((w) => w !== ws && (w.deserializeAttachment() as CtlAttach | null)?.registered);
@@ -721,7 +962,25 @@ export class TunnelDO extends DurableObject<Env> {
         return;
       }
 
+      // Account is authorized → claim/refresh/reclaim this tunnelId for it and
+      // (re)start the idle clock. Same write for all three verdicts (the only
+      // rejected case already returned above).
+      await this.ctx.storage.put('reservation', {
+        ownerSlug: slug,
+        lastSeenAt: Date.now(),
+        tunnelId,
+      } satisfies Reservation);
+
+      // Reclaimed from another account past its idle TTL → free the reserved-id
+      // slot on the previous owner so its count reflects the loss (#1/#3).
+      if (verdict === 'reclaim' && reservation && reservation.ownerSlug !== slug) {
+        await this.accountRpc('/release-id', { tunnelId }, reservation.ownerSlug);
+      }
+
       const authRequired = msg.authRequired !== false;
+      const ba = msg.basicAuth as { user?: string; pass?: string } | undefined;
+      const basicAuthHash =
+        ba && ba.user && ba.pass ? await hashToken(`${ba.user}:${ba.pass}`) : undefined;
       ws.serializeAttachment({
         role: 'ctl',
         registered: true,
@@ -733,6 +992,7 @@ export class TunnelDO extends DurableObject<Env> {
         regId,
         legacy,
         tokenHash,
+        basicAuthHash,
       } satisfies CtlAttach);
       // Seed the rate snapshot + quota level so headers work from the first
       // request and we don't re-announce the level the client already sees.
@@ -758,7 +1018,8 @@ export class TunnelDO extends DurableObject<Env> {
       const headers = buildResponseHeaders(
         (msg.headers as Record<string, string>) || {},
         pending.request,
-        pending.bootstrapCookie
+        pending.bootstrapCookie,
+        this.headerRules
       );
       for (const [k, v] of Object.entries(pending.rate)) headers.set(k, v);
       // A malformed body must resolve the request (502), not throw out of the
@@ -767,9 +1028,11 @@ export class TunnelDO extends DurableObject<Env> {
       try {
         body = msg.body ? b64decode(msg.body as string) : null;
       } catch {
+        this.finishInspect(msg.reqId as string, 502, null);
         pending.resolve(new Response('Malformed tunnel response', { status: 502, headers }));
         return;
       }
+      this.finishInspect(msg.reqId as string, (msg.status as number) || 200, body ? body.length : 0);
       pending.resolve(new Response(body, { status: (msg.status as number) || 200, headers }));
       return;
     }
@@ -780,10 +1043,14 @@ export class TunnelDO extends DurableObject<Env> {
       clearTimeout(pending.timer);
       this.pendingHttp.delete(msg.reqId as string);
       const reqId = msg.reqId as string;
+      // Streamed: record status + latency-to-first-byte now; body size is unknown
+      // (chunks stream out), so leave bytes null.
+      this.finishInspect(reqId, (msg.status as number) || 200, null);
       const headers = buildResponseHeaders(
         (msg.headers as Record<string, string>) || {},
         pending.request,
-        pending.bootstrapCookie
+        pending.bootstrapCookie,
+        this.headerRules
       );
       for (const [k, v] of Object.entries(pending.rate)) headers.set(k, v);
       const self = this;
