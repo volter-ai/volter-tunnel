@@ -110,11 +110,28 @@ token. But the entire account substrate (`AccountDO`, token model, credit
 limits) already exists. The gap is only the onboarding shim that creates a slug
 and mints a `vta_` token.
 
-**Decision: GitHub OAuth as primary signup, via device flow** (this is a
-CLI/library, so auth must work headless — `gh auth login`-style: approve in
-browser, CLI receives the token). GitHub scores best on every axis: low
-friction, strong abuse signal (account age/repos, hard to mass-farm),
-dev-native, headless-capable.
+**Decision (updated): piggyback on the user's existing GitHub auth — no OAuth
+app of our own.** Rather than register an OAuth app and run a device flow, we
+reuse the GitHub credential the user already has. Two methods, both implemented
+(#2):
+
+- **Token exchange (default):** the CLI sends `gh auth token` once; the relay
+  verifies it via the GitHub `/user` API and **discards it** (never stored or
+  logged), then mints **our own** `vta_` token as the ongoing credential. The gh
+  token is a one-time identity proof, not a stored secret.
+- **Gist proof (zero-token):** the relay issues a signed, self-expiring nonce
+  (stateless HMAC); the user publishes it as a public gist; the relay reads the
+  gist's public owner. No token ever leaves the user's machine.
+
+A verified GitHub id maps to a deterministic `gh-<id>` account, so returning
+users keep their account + reserved ids. This removes the OAuth-app dependency
+entirely and collapses signup to one relay endpoint + a `volter-tunnel login`
+command. Tradeoff (token method): the relay momentarily receives the broad gh
+token — mitigated by verify-and-discard + HTTPS, and avoidable via the gist
+method or self-hosting. **SSH-key proof** (signature challenge against
+`github.com/<user>.keys`) is a noted future third method for the git-over-SSH
+crowd who don't use `gh`. GitHub remains the right identity for its abuse signal
+and dev-native fit; device-flow OAuth was the original plan but is unnecessary.
 
 - **Add Google OAuth as a "reach" option later**, with a *tighter abuse default*
   (gmail is farmable) — provider strength becomes a trust/risk signal feeding
