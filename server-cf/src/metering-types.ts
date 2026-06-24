@@ -42,6 +42,9 @@ export interface MeteringEnv {
   /** Free-tier limits applied to a self-provisioned GitHub-signup account. */
   SIGNUP_DAY_LIMIT?: string;
   SIGNUP_MONTH_LIMIT?: string;
+  /** Comma-separated GitHub logins allowed to sign up (#2/#3). Unset/empty = open
+   *  signup; set = only these accounts may self-provision. */
+  SIGNUP_ALLOWED_USERS?: string;
   /** HMAC secret for stateless gist-proof nonces (#2). Falls back to ROOT_TOKEN. */
   SIGNUP_NONCE_SECRET?: string;
 }
