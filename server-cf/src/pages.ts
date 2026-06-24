@@ -224,7 +224,9 @@ export function landingPage(domain: string): string {
           .then(function (res) {
             if (res.ok) {
               msg.className = 'wl-msg ok';
-              msg.textContent = "You're on the list — we'll reach out when your GitHub account is approved.";
+              msg.textContent = res.j && res.j.alreadyAllowed
+                ? "You're already approved — run \`volter-tunnel login\` to sign up."
+                : "You're on the list — we'll reach out when your GitHub account is approved.";
               f.reset();
             } else {
               msg.className = 'wl-msg err';
