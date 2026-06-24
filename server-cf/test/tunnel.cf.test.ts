@@ -238,4 +238,22 @@ describe('JWT auth (authRequired tunnel)', () => {
     expect(res.status).toBe(200);
     expect(res.body).toBe('hello from origin');
   });
+
+  test('a JWT bound to this tunnel (tid claim) is accepted', async () => {
+    const token = jwt.sign({ sub: 'tester', tid: AUTH_ID }, JWT_SECRET, { algorithm: 'HS256' });
+    const res = await requestViaTunnel(relayPort, AUTH_ID, {
+      path: '/hello',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test('a JWT bound to a DIFFERENT tunnel (tid claim) is rejected (cross-tunnel)', async () => {
+    const token = jwt.sign({ sub: 'tester', tid: 'some-other-tunnel' }, JWT_SECRET, { algorithm: 'HS256' });
+    const res = await requestViaTunnel(relayPort, AUTH_ID, {
+      path: '/hello',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(401);
+  });
 });

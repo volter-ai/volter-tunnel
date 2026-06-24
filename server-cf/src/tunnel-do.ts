@@ -37,6 +37,12 @@ interface CtlAttach {
   leaseChunk?: number;
   /** Date.now() at register — tunnel-seconds are billed from here on close. */
   openedAt?: number;
+  /** Registration nonce — disambiguates this socket's account entry from a
+   *  replacement's, so a superseded socket's close can't clobber the new owner. */
+  regId?: string;
+  /** Re-authorize inputs (so a reaped-but-live tunnel can re-register its entry). */
+  legacy?: boolean;
+  tokenHash?: string;
 }
 interface BrowserAttach {
   role: 'browser';
@@ -211,15 +217,28 @@ export class TunnelDO extends DurableObject<Env> {
         this.consumedSinceCommit += cost;
         return true;
       }
-      const tunnelId = this.ctlAttach()?.tunnelId ?? '';
-      const want = Math.max(this.ctlAttach()?.leaseChunk ?? 50, cost);
-      const res = await this.accountRpc<LeaseResult>('/lease', {
+      const attach = this.ctlAttach();
+      const tunnelId = attach?.tunnelId ?? '';
+      const want = Math.max(attach?.leaseChunk ?? 50, cost);
+      let res = await this.accountRpc<LeaseResult>('/lease', {
         tunnelId,
+        regId: attach?.regId,
         want,
         commit: this.consumedSinceCommit,
         raw: this.takeRaw(),
       });
       this.consumedSinceCommit = 0;
+      // The account reaped our (idle) entry → re-register it and retry once so a
+      // still-connected tunnel self-heals instead of getting wedged at 0 budget.
+      if (res?.notOpen && (await this.reauthorize())) {
+        res = await this.accountRpc<LeaseResult>('/lease', {
+          tunnelId,
+          regId: this.ctlAttach()?.regId,
+          want,
+          commit: 0,
+          raw: this.takeRaw(),
+        });
+      }
       this.applyRate(res?.rate);
       this.budget += res?.grant ?? 0;
       if (this.budget >= cost) {
@@ -231,6 +250,21 @@ export class TunnelDO extends DurableObject<Env> {
     });
     this.budgetChain = run.catch(() => {});
     return run;
+  }
+
+  /** Re-authorize this tunnel's account entry after a reap. Runs inside the budget
+   *  chain (callers already hold it). True if the account re-accepted the tunnel. */
+  private async reauthorize(): Promise<boolean> {
+    const a = this.ctlAttach();
+    if (!a?.slug || !a.regId) return false;
+    const auth = await this.accountRpc<AuthorizeResult>('/authorize', {
+      slug: a.slug,
+      legacy: a.legacy,
+      tokenHash: a.tokenHash,
+      tunnelId: a.tunnelId,
+      regId: a.regId,
+    });
+    return !!auth?.ok;
   }
 
   /** Charge one relayed-message op. Fast path: spend from the locally-held lease
@@ -323,7 +357,10 @@ export class TunnelDO extends DurableObject<Env> {
 
     let bootstrapCookie: string | null = null;
     if (attach.authRequired && this.env.JWT_SECRET) {
-      const auth = await validateAuth(request, url, this.env.JWT_SECRET);
+      const auth = await validateAuth(request, url, this.env.JWT_SECRET, {
+        tunnelId: attach.tunnelId,
+        requireTid: this.env.REQUIRE_TID === 'true',
+      });
       if (!auth) {
         return Response.json(
           { error: 'Authentication required' },
@@ -402,7 +439,11 @@ export class TunnelDO extends DurableObject<Env> {
     if (!ctl || !attach?.registered) return new Response('Tunnel not connected', { status: 502 });
 
     if (attach.authRequired && this.env.JWT_SECRET) {
-      if (!(await validateWsAuth(request, url, this.env.JWT_SECRET))) {
+      const okWs = await validateWsAuth(request, url, this.env.JWT_SECRET, {
+        tunnelId: attach.tunnelId,
+        requireTid: this.env.REQUIRE_TID === 'true',
+      });
+      if (!okWs) {
         return new Response('Unauthorized', { status: 401 });
       }
     }
@@ -532,6 +573,7 @@ export class TunnelDO extends DurableObject<Env> {
         {
           slug: attach.slug,
           tunnelId: attach.tunnelId,
+          regId: attach.regId,
           consumed: this.consumedSinceCommit,
           seconds,
           raw: this.takeRaw(),
@@ -658,6 +700,10 @@ export class TunnelDO extends DurableObject<Env> {
       const tunnelId =
         existing?.tunnelId || (msg.tunnelId as string) || crypto.randomUUID().slice(0, 8);
 
+      // Unique registration nonce — lets the account tell this socket's ledger
+      // entry apart from a later replacement's (fixes the replace race).
+      const regId = crypto.randomUUID();
+
       // Authorize against the account: valid token, active, under the concurrent
       // cap, and with budget remaining. A rejection closes the control socket.
       const auth = await this.accountRpc<AuthorizeResult>('/authorize', {
@@ -665,6 +711,7 @@ export class TunnelDO extends DurableObject<Env> {
         legacy,
         tokenHash,
         tunnelId,
+        regId,
       });
       if (!auth || !auth.ok) {
         const reason = auth?.reason ?? 'account unavailable';
@@ -683,6 +730,9 @@ export class TunnelDO extends DurableObject<Env> {
         slug,
         leaseChunk: auth.leaseChunk ?? 50,
         openedAt: Date.now(),
+        regId,
+        legacy,
+        tokenHash,
       } satisfies CtlAttach);
       // Seed the rate snapshot + quota level so headers work from the first
       // request and we don't re-announce the level the client already sees.
