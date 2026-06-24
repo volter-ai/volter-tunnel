@@ -6,6 +6,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
+import { rmSync } from 'node:fs';
 import { WebSocket, WebSocketServer } from 'ws';
 import { type Unstable_DevWorker, unstable_dev } from 'wrangler';
 import { createTunnel, type TunnelHandle } from '../../client/tunnel-client.ts';
@@ -112,6 +113,11 @@ let tunnel: TunnelHandle;
 const ID = 'battle';
 
 beforeAll(async () => {
+  // Hermetic start: clear persisted DO state so the internal account bootstraps
+  // fresh (other suites may have left it with a low metered limit).
+  for (const cls of ['AccountDO', 'RegistryDO', 'TunnelDO']) {
+    rmSync(`.wrangler/state/v3/do/volter-tunnel-test-${cls}`, { recursive: true, force: true });
+  }
   const o = makeOrigin('main');
   origin = o.server;
   originPort = await o.port;

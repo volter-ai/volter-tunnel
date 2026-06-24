@@ -23,12 +23,20 @@ import {
   validateAuth,
   validateWsAuth,
 } from './auth';
+import { CREDIT_WEIGHTS, hashToken, parseToken, type UsageDelta } from './credits';
+import type { AuthorizeResult } from './metering-types';
 
 interface CtlAttach {
   role: 'ctl';
   registered: boolean;
   authRequired: boolean;
   tunnelId: string;
+  /** Account this tunnel meters against — set at register, survives hibernation. */
+  slug?: string;
+  /** Credits granted per lease top-up (from the account config). */
+  leaseChunk?: number;
+  /** Date.now() at register — tunnel-seconds are billed from here on close. */
+  openedAt?: number;
 }
 interface BrowserAttach {
   role: 'browser';
@@ -95,6 +103,82 @@ export class TunnelDO extends DurableObject<Env> {
   private pendingHttp = new Map<string, PendingHttp>();
   private streaming = new Map<string, Streaming>();
   private pendingUpgrades = new Map<string, PendingUpgrade>();
+
+  // ── metering state (ephemeral; safe to lose on hibernation) ────────────────
+  /** Credits leased from the account but not yet spent. */
+  private budget = 0;
+  /** Credits spent since the last lease/close flush to the account. */
+  private consumedSinceCommit = 0;
+  /** Raw usage (for dashboards) accumulated since the last flush. */
+  private rawSinceFlush: UsageDelta = { requests: 0, wsUpgrades: 0, bytes: 0, seconds: 0 };
+  /** Serializes budget mutations so concurrent requests don't double-lease. */
+  private budgetChain: Promise<unknown> = Promise.resolve();
+
+  private accountStub(slug?: string): DurableObjectStub | null {
+    const s = slug ?? this.ctlAttach()?.slug;
+    if (!s) return null;
+    return this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName(s));
+  }
+
+  /** RPC to the account DO. `slug` is required at register (before the slug is in
+   *  the attachment); afterwards it's read from the attachment. */
+  private async accountRpc<T>(
+    path: string,
+    payload: Record<string, unknown>,
+    slug?: string
+  ): Promise<T | null> {
+    const stub = this.accountStub(slug ?? (payload.slug as string | undefined));
+    if (!stub) return null;
+    try {
+      const res = await stub.fetch(`https://account${path}`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      return (await res.json()) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  private takeRaw(): UsageDelta {
+    const r = this.rawSinceFlush;
+    this.rawSinceFlush = { requests: 0, wsUpgrades: 0, bytes: 0, seconds: 0 };
+    return r;
+  }
+
+  /**
+   * Pre-authorize `cost` credits before relaying. Spends from the local lease;
+   * tops the lease up from the account when short. Returns false (→ 429) when the
+   * account has no budget left — the hard cutoff that bounds spend. Fail-closed:
+   * an unreachable account yields no grant, so traffic stops rather than runs free.
+   */
+  private ensureBudget(cost: number): Promise<boolean> {
+    const run = this.budgetChain.then(async () => {
+      if (this.budget >= cost) {
+        this.budget -= cost;
+        this.consumedSinceCommit += cost;
+        return true;
+      }
+      const tunnelId = this.ctlAttach()?.tunnelId ?? '';
+      const want = Math.max(this.ctlAttach()?.leaseChunk ?? 50, cost);
+      const res = await this.accountRpc<{ grant: number }>('/lease', {
+        tunnelId,
+        want,
+        commit: this.consumedSinceCommit,
+        raw: this.takeRaw(),
+      });
+      this.consumedSinceCommit = 0;
+      this.budget += res?.grant ?? 0;
+      if (this.budget >= cost) {
+        this.budget -= cost;
+        this.consumedSinceCommit += cost;
+        return true;
+      }
+      return false;
+    });
+    this.budgetChain = run.catch(() => {});
+    return run;
+  }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -175,6 +259,16 @@ export class TunnelDO extends DurableObject<Env> {
       });
     }
 
+    // Meter + hard-cutoff: a request only relays if the account has budget.
+    this.rawSinceFlush.requests = (this.rawSinceFlush.requests ?? 0) + 1;
+    this.rawSinceFlush.bytes = (this.rawSinceFlush.bytes ?? 0) + (bodyBytes?.length ?? 0);
+    if (!(await this.ensureBudget(CREDIT_WEIGHTS.request))) {
+      return new Response('Account quota exceeded', {
+        status: 429,
+        headers: corsHeaders(request),
+      });
+    }
+
     const reqId = crypto.randomUUID();
     return await new Promise<Response>((resolve) => {
       const timer = setTimeout(() => {
@@ -212,6 +306,12 @@ export class TunnelDO extends DurableObject<Env> {
       if (!(await validateWsAuth(request, url, this.env.JWT_SECRET))) {
         return new Response('Unauthorized', { status: 401 });
       }
+    }
+
+    // Meter + hard-cutoff (one charge per upgrade; relayed frames are not priced).
+    this.rawSinceFlush.wsUpgrades = (this.rawSinceFlush.wsUpgrades ?? 0) + 1;
+    if (!(await this.ensureBudget(CREDIT_WEIGHTS.wsUpgrade))) {
+      return new Response('Account quota exceeded', { status: 429 });
     }
 
     const connId = crypto.randomUUID();
@@ -269,7 +369,7 @@ export class TunnelDO extends DurableObject<Env> {
     } catch {
       return;
     }
-    this.onControlMessage(ws, msg);
+    await this.onControlMessage(ws, msg);
   }
 
   async webSocketClose(ws: WebSocket): Promise<void> {
@@ -285,6 +385,25 @@ export class TunnelDO extends DurableObject<Env> {
       }
       return;
     }
+    // Settle metering: commit unflushed usage + tunnel-seconds and return any
+    // unconsumed lease to the account (recovers budget stranded by hibernation).
+    if (attach?.slug) {
+      const seconds = attach.openedAt ? Math.max(0, (Date.now() - attach.openedAt) / 1000) : 0;
+      await this.accountRpc(
+        '/close',
+        {
+          slug: attach.slug,
+          tunnelId: attach.tunnelId,
+          consumed: this.consumedSinceCommit,
+          seconds,
+          raw: this.takeRaw(),
+        },
+        attach.slug
+      );
+      this.consumedSinceCommit = 0;
+      this.budget = 0;
+    }
+
     // Control socket gone → tear down EVERYTHING for this tunnel (mirrors
     // server.mjs:751-794): close browser relays, fail pending requests/upgrades,
     // error open streams. Without this, a client disconnect mid-stream leaks hung
@@ -349,15 +468,32 @@ export class TunnelDO extends DurableObject<Env> {
   }
 
   // ── control protocol ──────────────────────────────────────────────────────
-  private onControlMessage(ws: WebSocket, msg: Record<string, unknown>): void {
+  private async onControlMessage(ws: WebSocket, msg: Record<string, unknown>): Promise<void> {
     const type = msg.type as string;
 
     if (type === 'register') {
-      if (this.env.TUNNEL_SECRET && !safeEqual(String(msg.secret ?? ''), this.env.TUNNEL_SECRET)) {
+      // Resolve the metering account from the presented secret. An api token
+      // (`vta_<slug>_…`) names + proves its account; the legacy shared
+      // TUNNEL_SECRET (or an open relay with no secret) maps to the built-in
+      // internal account for backward compatibility during migration.
+      const secret = String(msg.secret ?? '');
+      const internal = this.env.INTERNAL_ACCOUNT || 'volter-internal';
+      const parsed = parseToken(secret);
+      let slug: string;
+      let legacy = false;
+      let tokenHash: string | undefined;
+      if (parsed?.kind === 'api') {
+        slug = parsed.slug!;
+        tokenHash = await hashToken(secret);
+      } else if (!this.env.TUNNEL_SECRET || safeEqual(secret, this.env.TUNNEL_SECRET)) {
+        slug = internal;
+        legacy = true;
+      } else {
         ws.send(JSON.stringify({ type: 'error', message: 'Invalid tunnel secret' }));
         ws.close(4003, 'Invalid tunnel secret');
         return;
       }
+
       const others = this.ctx
         .getWebSockets('ctl')
         .filter((w) => w !== ws && (w.deserializeAttachment() as CtlAttach | null)?.registered);
@@ -381,8 +517,33 @@ export class TunnelDO extends DurableObject<Env> {
       const existing = ws.deserializeAttachment() as CtlAttach | null;
       const tunnelId =
         existing?.tunnelId || (msg.tunnelId as string) || crypto.randomUUID().slice(0, 8);
+
+      // Authorize against the account: valid token, active, under the concurrent
+      // cap, and with budget remaining. A rejection closes the control socket.
+      const auth = await this.accountRpc<AuthorizeResult>('/authorize', {
+        slug,
+        legacy,
+        tokenHash,
+        tunnelId,
+      });
+      if (!auth || !auth.ok) {
+        const reason = auth?.reason ?? 'account unavailable';
+        const code = reason === 'badToken' ? 4003 : 4029;
+        ws.send(JSON.stringify({ type: 'error', message: `Tunnel rejected: ${reason}` }));
+        ws.close(code, reason);
+        return;
+      }
+
       const authRequired = msg.authRequired !== false;
-      ws.serializeAttachment({ role: 'ctl', registered: true, authRequired, tunnelId } satisfies CtlAttach);
+      ws.serializeAttachment({
+        role: 'ctl',
+        registered: true,
+        authRequired,
+        tunnelId,
+        slug,
+        leaseChunk: auth.leaseChunk ?? 50,
+        openedAt: Date.now(),
+      } satisfies CtlAttach);
       const url = `https://${tunnelId}.${this.env.TUNNEL_DOMAIN}`;
       ws.send(JSON.stringify({ type: 'registered', tunnelId, url }));
       return;

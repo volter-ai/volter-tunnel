@@ -6,14 +6,35 @@
   "observability": { "enabled": true },
 
   "durable_objects": {
-    "bindings": [{ "name": "TUNNEL", "class_name": "TunnelDO" }]
+    "bindings": [
+      { "name": "TUNNEL", "class_name": "TunnelDO" },
+      { "name": "ACCOUNTS", "class_name": "AccountDO" },
+      { "name": "REGISTRY", "class_name": "RegistryDO" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TunnelDO"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["TunnelDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["AccountDO", "RegistryDO"] }
+  ],
 
   // Public base domain for tunnel URLs. Tunnel URLs are {tunnelId}.<this>.
   // Use a 1-level wildcard zone so free Universal SSL covers *.<domain>.
   // Override per-env / via `--var` in tests.
-  "vars": { "TUNNEL_DOMAIN": "voltertest.xyz" },
+  //
+  // Metering vars (non-secret) — global ceiling = Σ(account limits) cap, and the
+  // built-in internal account's defaults. ROOT_TOKEN is a secret (wrangler secret
+  // put ROOT_TOKEN). Credits are charged per request/ws-upgrade by default.
+  "vars": {
+    "TUNNEL_DOMAIN": "voltertest.xyz",
+    "INTERNAL_ACCOUNT": "volter-internal",
+    "INTERNAL_DAY_LIMIT": "5000000",
+    "INTERNAL_MONTH_LIMIT": "100000000",
+    "INTERNAL_CONCURRENT": "1000",
+    "GLOBAL_DAY_LIMIT": "10000000",
+    "GLOBAL_MONTH_LIMIT": "200000000",
+    "DEFAULT_CONCURRENT": "100",
+    "DEFAULT_LEASE_CHUNK": "50"
+  },
 
   // workers_dev keeps <name>.<acct>.workers.dev available for the control channel
   // (clients connect to <host>/ws?id=...). The wildcard route serves tunnel data.
@@ -23,5 +44,5 @@
   ]
 
   // Secrets (set via `wrangler secret put` in prod, `.dev.vars` locally):
-  //   TUNNEL_SECRET, JWT_SECRET
+  //   TUNNEL_SECRET, JWT_SECRET, ROOT_TOKEN
 }

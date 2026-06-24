@@ -10,8 +10,10 @@
  */
 import { type Env, getTunnelIdFromHost, handleCookieBootstrap } from './auth';
 import { TunnelDO } from './tunnel-do';
+import { AccountDO } from './account-do';
+import { RegistryDO } from './registry-do';
 
-export { TunnelDO };
+export { TunnelDO, AccountDO, RegistryDO };
 
 function routeToDO(env: Env, name: string, request: Request): Promise<Response> {
   const id = env.TUNNEL.idFromName(name);
@@ -21,6 +23,13 @@ function routeToDO(env: Env, name: string, request: Request): Promise<Response> 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    // Management plane — token/account/usage admin. Routed to the single
+    // RegistryDO, which authenticates (root or service token) and coordinates.
+    if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+      const id = env.REGISTRY.idFromName('registry');
+      return env.REGISTRY.get(id).fetch(request);
+    }
 
     // Control channel — the client tells us which DO it belongs to via ?id=.
     if (url.pathname === '/ws') {

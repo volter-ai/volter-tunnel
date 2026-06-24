@@ -10,6 +10,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
+import { rmSync } from 'node:fs';
 import jwt from 'jsonwebtoken';
 import { WebSocket, WebSocketServer } from 'ws';
 import { type Unstable_DevWorker, unstable_dev } from 'wrangler';
@@ -68,6 +69,11 @@ let tunnel: TunnelHandle;
 const TUNNEL_ID = 'cftun';
 
 beforeAll(async () => {
+  // Hermetic start: clear persisted DO state so the internal account (and its
+  // metered limits) bootstraps fresh, independent of other suites' runs.
+  for (const cls of ['AccountDO', 'RegistryDO', 'TunnelDO']) {
+    rmSync(`.wrangler/state/v3/do/volter-tunnel-test-${cls}`, { recursive: true, force: true });
+  }
   relayPort = await freePort();
   originPort = await freePort();
 

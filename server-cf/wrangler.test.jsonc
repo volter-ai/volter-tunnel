@@ -8,7 +8,14 @@
   "main": "src/worker.ts",
   "compatibility_date": "2026-06-16",
   "durable_objects": {
-    "bindings": [{ "name": "TUNNEL", "class_name": "TunnelDO" }]
+    "bindings": [
+      { "name": "TUNNEL", "class_name": "TunnelDO" },
+      { "name": "ACCOUNTS", "class_name": "AccountDO" },
+      { "name": "REGISTRY", "class_name": "RegistryDO" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TunnelDO"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["TunnelDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["AccountDO", "RegistryDO"] }
+  ]
 }
