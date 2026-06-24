@@ -24,7 +24,8 @@ import {
   validateWsAuth,
 } from './auth';
 import { CREDIT_WEIGHTS, hashToken, parseToken, type UsageDelta } from './credits';
-import type { AuthorizeResult, LeaseResult, RateSnapshot } from './metering-types';
+import { envNum, reservationDecision } from './metering-types';
+import type { AuthorizeResult, LeaseResult, RateSnapshot, Reservation } from './metering-types';
 
 interface CtlAttach {
   role: 'ctl';
@@ -582,6 +583,17 @@ export class TunnelDO extends DurableObject<Env> {
       );
       this.consumedSinceCommit = 0;
       this.budget = 0;
+
+      // Idle clock starts now: stamp lastSeenAt at disconnect so the reclaim TTL
+      // counts from when the owner went away, not from when it first connected
+      // (DECISIONS D5). Only the current owner may move its own clock.
+      const res = await this.ctx.storage.get<Reservation>('reservation');
+      if (res && res.ownerSlug === attach.slug) {
+        await this.ctx.storage.put('reservation', {
+          ownerSlug: res.ownerSlug,
+          lastSeenAt: Date.now(),
+        } satisfies Reservation);
+      }
     }
 
     // Control socket gone → tear down EVERYTHING for this tunnel (mirrors
@@ -676,6 +688,25 @@ export class TunnelDO extends DurableObject<Env> {
         return;
       }
 
+      // ── reserved-id ownership: lazy reclaim-on-contention (DECISIONS D5) ──────
+      // This DO *is* the tunnelId, so a single 'reservation' record is its owner.
+      // A different account may take a reserved id only once the current owner has
+      // been idle past RESERVATION_IDLE_TTL_DAYS; while the owner is active a
+      // foreign claim is refused so the id stays stable. lastSeenAt is refreshed
+      // on (re)register (below, after authorize) and on disconnect.
+      const ttlMs = envNum(this.env.RESERVATION_IDLE_TTL_DAYS, 60) * 86_400_000;
+      const reservation = await this.ctx.storage.get<Reservation>('reservation');
+      if (reservationDecision(reservation, slug, Date.now(), ttlMs) === 'reject') {
+        ws.send(
+          JSON.stringify({
+            type: 'error',
+            message: `Tunnel ID '${String(msg.tunnelId ?? '')}' is reserved by another account.`,
+          })
+        );
+        ws.close(4002, 'Tunnel ID reserved');
+        return;
+      }
+
       const others = this.ctx
         .getWebSockets('ctl')
         .filter((w) => w !== ws && (w.deserializeAttachment() as CtlAttach | null)?.registered);
@@ -720,6 +751,14 @@ export class TunnelDO extends DurableObject<Env> {
         ws.close(code, reason);
         return;
       }
+
+      // Account is authorized → claim/refresh/reclaim this tunnelId for it and
+      // (re)start the idle clock. Same write for all three verdicts (the only
+      // rejected case already returned above).
+      await this.ctx.storage.put('reservation', {
+        ownerSlug: slug,
+        lastSeenAt: Date.now(),
+      } satisfies Reservation);
 
       const authRequired = msg.authRequired !== false;
       ws.serializeAttachment({

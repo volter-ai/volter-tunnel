@@ -885,3 +885,40 @@ describe('legacy shared secret still works (internal account)', () => {
     expect(res.ok).toBe(true);
   }, 12000);
 });
+
+describe('reserved-id ownership (idle reclaim-on-contention, DECISIONS D5)', () => {
+  // `cap` owns the id; `hdr` is a different account that contends for it. The
+  // contender is refused at the reservation check (before authorize), so neither
+  // account's budget matters here — only ownership.
+  test('a reserved tunnelId is refused to a different account while the owner is active', async () => {
+    const owner = rawRegister(port, 'rez-stable', capApi);
+    expect((await owner.result).ok).toBe(true);
+    // Owner disconnects — the id must STAY reserved (this is the whole feature).
+    try {
+      owner.ws.close();
+    } catch {
+      /* ignore */
+    }
+
+    const contender = rawRegister(port, 'rez-stable', hdrApi);
+    const res = await contender.result;
+    try {
+      contender.ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe(4002); // "Tunnel ID reserved"
+  }, 15000);
+
+  test('the owning account keeps (refreshes) its own reserved id on reconnect', async () => {
+    const again = rawRegister(port, 'rez-stable', capApi);
+    const res = await again.result;
+    try {
+      again.ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(res.ok).toBe(true);
+  }, 15000);
+});

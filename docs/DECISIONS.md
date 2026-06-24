@@ -157,6 +157,8 @@ friendly behavior originally pitched).
 ## D6. Open policy decisions (need values)
 
 - **Idle-reclaim TTL** — 30 / 60 / 90 days idle before reclaimable-on-contention.
+  *Implemented* as env `RESERVATION_IDLE_TTL_DAYS`, **default 60**; confirm the
+  final policy value.
 - **Free-tier reserved-ID count per account** — Wormhole uses 3.
 - **Free-tier monthly bandwidth/active-duration cap.**
 - **Inspector replay retention** — free-preview window vs paid days + max size.
