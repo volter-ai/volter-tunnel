@@ -4,7 +4,7 @@
  * Ports server/server.mjs's JWT/cookie/CORS/CSP logic to the Fetch API and
  * `jose` (WebCrypto-based; `jsonwebtoken` does not run on Workers).
  */
-import { jwtVerify } from 'jose';
+import { type JWTPayload, jwtVerify } from 'jose';
 import type { MeteringEnv } from './metering-types';
 
 export interface Env extends MeteringEnv {
@@ -12,6 +12,10 @@ export interface Env extends MeteringEnv {
   TUNNEL_DOMAIN: string;
   TUNNEL_SECRET: string;
   JWT_SECRET: string;
+  /** When 'true', a data-plane JWT MUST carry a `tid` claim matching the tunnel
+   *  (full per-tunnel isolation). Default: a JWT with a `tid` is still bound to
+   *  that tunnel, but a JWT without one is accepted on any tunnel (shared SSO). */
+  REQUIRE_TID?: string;
 }
 
 /** Extract the tunnelId from a Host header: `<id>.<domain>` → `<id>`. Port-tolerant. */
@@ -36,13 +40,27 @@ export function parseCookies(cookieHeader: string | null): Map<string, string> {
   return cookies;
 }
 
-async function verify(token: string, secret: string): Promise<boolean> {
+/** Verify a JWT signature; return its payload (or null on failure). */
+async function verifyToken(token: string, secret: string): Promise<JWTPayload | null> {
   try {
-    await jwtVerify(token, new TextEncoder().encode(secret), { algorithms: ['HS256'] });
-    return true;
+    const { payload } = await jwtVerify(token, new TextEncoder().encode(secret), { algorithms: ['HS256'] });
+    return payload;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Boolean wrapper (the cookie-bootstrap path doesn't need the payload). */
+async function verify(token: string, secret: string): Promise<boolean> {
+  return (await verifyToken(token, secret)) !== null;
+}
+
+/** Per-tunnel binding check. A token with a `tid` claim is bound to that tunnel;
+ *  a token without one is accepted on any tunnel unless `requireTid`. */
+function tidOk(payload: JWTPayload, tunnelId: string | undefined, requireTid: boolean): boolean {
+  const tid = typeof payload.tid === 'string' ? payload.tid : undefined;
+  if (tid !== undefined) return !tunnelId || tid === tunnelId;
+  return !requireTid;
 }
 
 export interface AuthResult {
@@ -50,28 +68,37 @@ export interface AuthResult {
   source: 'header' | 'query' | 'cookie';
 }
 
+export interface AuthOpts {
+  /** Tunnel this request is for — a `tid`-bound token must match it. */
+  tunnelId?: string;
+  /** Reject tokens that carry no `tid` claim (full per-tunnel isolation). */
+  requireTid?: boolean;
+}
+
 /** Validate auth from an HTTP request: Bearer header → ?__volter_token= → __volter_auth cookie. */
 export async function validateAuth(
   request: Request,
   url: URL,
-  jwtSecret: string
+  jwtSecret: string,
+  opts: AuthOpts = {}
 ): Promise<AuthResult | null> {
   if (!jwtSecret) return null;
+  const ok = (p: JWTPayload | null) => !!p && tidOk(p, opts.tunnelId, !!opts.requireTid);
 
   const authHeader = request.headers.get('authorization');
   if (authHeader?.startsWith('Bearer ')) {
     const token = authHeader.slice(7);
-    return (await verify(token, jwtSecret)) ? { token, source: 'header' } : null;
+    return ok(await verifyToken(token, jwtSecret)) ? { token, source: 'header' } : null;
   }
 
   const queryToken = url.searchParams.get('__volter_token');
   if (queryToken) {
-    return (await verify(queryToken, jwtSecret)) ? { token: queryToken, source: 'query' } : null;
+    return ok(await verifyToken(queryToken, jwtSecret)) ? { token: queryToken, source: 'query' } : null;
   }
 
   const cookieToken = parseCookies(request.headers.get('cookie')).get('__volter_auth');
   if (cookieToken) {
-    return (await verify(cookieToken, jwtSecret)) ? { token: cookieToken, source: 'cookie' } : null;
+    return ok(await verifyToken(cookieToken, jwtSecret)) ? { token: cookieToken, source: 'cookie' } : null;
   }
 
   return null;
@@ -81,13 +108,15 @@ export async function validateAuth(
 export async function validateWsAuth(
   request: Request,
   url: URL,
-  jwtSecret: string
+  jwtSecret: string,
+  opts: AuthOpts = {}
 ): Promise<boolean> {
   if (!jwtSecret) return false;
+  const ok = (p: JWTPayload | null) => !!p && tidOk(p, opts.tunnelId, !!opts.requireTid);
   const queryToken = url.searchParams.get('__volter_token');
-  if (queryToken) return verify(queryToken, jwtSecret);
+  if (queryToken) return ok(await verifyToken(queryToken, jwtSecret));
   const cookieToken = parseCookies(request.headers.get('cookie')).get('__volter_auth');
-  if (cookieToken) return verify(cookieToken, jwtSecret);
+  if (cookieToken) return ok(await verifyToken(cookieToken, jwtSecret));
   return false;
 }
 

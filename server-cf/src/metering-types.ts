@@ -96,6 +96,9 @@ export interface AuthorizeResult {
 export interface LeaseResult {
   grant: number;
   over: boolean;
+  /** The tunnel's open entry was missing (reaped/unknown) — caller should
+   *  re-authorize and retry once. */
+  notOpen?: boolean;
   rate: RateSnapshot;
 }
 

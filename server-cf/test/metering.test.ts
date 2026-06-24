@@ -776,6 +776,54 @@ describe('relayed WS frames are metered (cap holds for chatty tunnels)', () => {
 });
 
 describe('robustness regressions', () => {
+  test('register-replace does not throttle the surviving tunnel (regId race)', async () => {
+    const id = 'race-t';
+    const reg = (ws: WebSocket, replace: boolean) =>
+      new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('no registered')), 8000);
+        ws.on('open', () =>
+          ws.send(JSON.stringify({ type: 'register', tunnelId: id, secret: hdrApi, authRequired: false, replace }))
+        );
+        ws.on('message', (m) => {
+          const msg = JSON.parse(m.toString());
+          if (msg.type === 'registered') {
+            clearTimeout(timer);
+            resolve();
+          }
+          if (msg.type === 'request') {
+            ws.send(
+              JSON.stringify({
+                type: 'response',
+                reqId: msg.reqId,
+                status: 200,
+                headers: {},
+                body: Buffer.from('survivor').toString('base64'),
+              })
+            );
+          }
+        });
+        ws.on('error', () => {});
+      });
+
+    const a = new WebSocket(`ws://127.0.0.1:${port}/ws?id=${id}`);
+    await reg(a, false);
+    const b = new WebSocket(`ws://127.0.0.1:${port}/ws?id=${id}`); // replaces A, closing it
+    await reg(b, true);
+    await new Promise((r) => setTimeout(r, 600)); // let A's close land (must be a no-op vs B's entry)
+
+    // The survivor (B) must still serve — its account ledger entry must not have
+    // been clobbered by the replaced socket's close.
+    const r = await reqFull(port, id, '/x');
+    try {
+      a.close();
+      b.close();
+    } catch {
+      /* ignore */
+    }
+    expect(r.status).toBe(200);
+    expect(r.body).toBe('survivor');
+  }, 15000);
+
   test('a malformed tunnel response resolves 502, not a 30s hang', async () => {
     const id = 'malformed-t';
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?id=${id}`);

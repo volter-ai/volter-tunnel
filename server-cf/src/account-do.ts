@@ -31,10 +31,27 @@ interface Usage {
   month: string;
   dayUsed: number;
   monthUsed: number;
-  /** Credits handed out as leases but not yet committed (Σ of `open` values). */
+  /** Credits handed out as leases but not yet committed (Σ of open[*].lease). */
   leased: number;
   raw: { requests: number; wsUpgrades: number; bytes: number; seconds: number };
 }
+
+/** Per-open-tunnel ledger entry. `regId` is the registration nonce of the
+ *  control socket that owns this entry — a `/close` or `/lease` from a superseded
+ *  socket (different regId) is ignored, which fixes the register-replace race.
+ *  `seen` is the last-activity epoch-ms; the reaper reclaims entries whose TunnelDO
+ *  died without a clean close (and stopped refreshing `seen`). */
+interface OpenEntry {
+  lease: number;
+  regId: string;
+  seen: number;
+}
+
+/** Reclaim an open tunnel whose owner hasn't refreshed it in this long (a
+ *  TunnelDO that vanished without webSocketClose firing). A live-but-idle tunnel
+ *  that gets reaped self-heals by re-authorizing on its next lease, so this can
+ *  be aggressive without wrongly cutting off a still-connected tunnel. */
+const OPEN_REAP_TTL_MS = 30 * 60_000;
 
 function emptyUsage(now: Date): Usage {
   return {
@@ -51,8 +68,8 @@ export class AccountDO extends DurableObject<MeteringEnv> {
   private config: AccountConfig | null = null;
   private apiHashes = new Set<string>();
   private usage!: Usage;
-  /** tunnelId → outstanding leased credits for that tunnel. */
-  private open = new Map<string, number>();
+  /** tunnelId → open-tunnel ledger entry. */
+  private open = new Map<string, OpenEntry>();
   private loaded: Promise<void>;
 
   constructor(ctx: DurableObjectState, env: MeteringEnv) {
@@ -61,7 +78,14 @@ export class AccountDO extends DurableObject<MeteringEnv> {
       this.config = (await ctx.storage.get<AccountConfig>('config')) ?? null;
       this.apiHashes = new Set((await ctx.storage.get<string[]>('apiHashes')) ?? []);
       this.usage = (await ctx.storage.get<Usage>('usage')) ?? emptyUsage(new Date());
-      this.open = new Map(Object.entries((await ctx.storage.get<Record<string, number>>('open')) ?? {}));
+      const stored = (await ctx.storage.get<Record<string, OpenEntry | number>>('open')) ?? {};
+      // Tolerate the legacy shape (tunnelId → number) from before the ledger entry.
+      this.open = new Map(
+        Object.entries(stored).map(([k, v]) => [
+          k,
+          typeof v === 'number' ? { lease: v, regId: '', seen: 0 } : v,
+        ])
+      );
     });
   }
 
@@ -71,6 +95,22 @@ export class AccountDO extends DurableObject<MeteringEnv> {
   }
   private async persistOpen(): Promise<void> {
     await this.ctx.storage.put('open', Object.fromEntries(this.open));
+  }
+
+  /** Reclaim open entries whose owner went silent (TunnelDO vanished without a
+   *  clean close), returning their stranded lease. Called at the start of every
+   *  authorize/lease so the account can't get permanently stuck at its concurrency
+   *  cap or leak budget. Returns true if anything was reaped. */
+  private reap(nowMs: number): boolean {
+    let changed = false;
+    for (const [tunnelId, e] of this.open) {
+      if (nowMs - e.seen > OPEN_REAP_TTL_MS) {
+        this.usage.leased = Math.max(0, this.usage.leased - e.lease);
+        this.open.delete(tunnelId);
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   /** Lazily reset day/month buckets when the wall clock crosses a boundary.
@@ -128,10 +168,11 @@ export class AccountDO extends DurableObject<MeteringEnv> {
   /** Move `consumed` credits for a tunnel from leased → used. */
   private applyCommit(tunnelId: string, consumed: number): void {
     if (consumed <= 0) return;
-    const outstanding = this.open.get(tunnelId) ?? 0;
-    const c = Math.min(consumed, outstanding);
+    const e = this.open.get(tunnelId);
+    if (!e) return;
+    const c = Math.min(consumed, e.lease);
     if (c <= 0) return;
-    this.open.set(tunnelId, outstanding - c);
+    e.lease -= c;
     this.usage.leased = Math.max(0, this.usage.leased - c);
     this.usage.dayUsed += c;
     this.usage.monthUsed += c;
@@ -207,6 +248,7 @@ export class AccountDO extends DurableObject<MeteringEnv> {
   private async authorize(body: Record<string, unknown>): Promise<AuthorizeResult> {
     const slug = String(body.slug ?? '');
     const tunnelId = String(body.tunnelId ?? '');
+    const regId = String(body.regId ?? '');
     await this.ensureBootstrap(slug);
     if (!this.config) return { ok: false, reason: 'noAccount' };
     if (this.config.status !== 'active') return { ok: false, reason: 'suspended' };
@@ -217,43 +259,58 @@ export class AccountDO extends DurableObject<MeteringEnv> {
     }
 
     const now = new Date();
+    const nowMs = now.getTime();
     this.rollPeriods(now);
+    this.reap(nowMs);
 
-    const alreadyOpen = this.open.has(tunnelId);
-    if (!alreadyOpen && this.open.size >= this.config.concurrentMax) {
+    const existing = this.open.get(tunnelId);
+    if (!existing && this.open.size >= this.config.concurrentMax) {
       return { ok: false, reason: 'concurrency' };
     }
     if (this.dayRemaining() <= 0 || this.monthRemaining() <= 0) {
       return { ok: false, reason: 'overQuota' };
     }
 
-    if (!alreadyOpen) {
-      this.open.set(tunnelId, 0);
-      await this.persistOpen();
-    }
+    // Create the entry, or take it over on replace (keep the outstanding lease,
+    // swap in the new owner's regId so the old socket's close becomes a no-op).
+    this.open.set(tunnelId, { lease: existing?.lease ?? 0, regId, seen: nowMs });
+    await this.persistOpen();
     return { ok: true, slug: this.config.slug, leaseChunk: this.config.leaseChunk, rate: this.snapshot() };
+  }
+
+  /** True when `regId` is allowed to act on this entry (matches, or either side
+   *  is blank — back-compat with legacy entries / callers that omit the nonce). */
+  private owns(e: OpenEntry | undefined, regId: string): e is OpenEntry {
+    return !!e && (!e.regId || !regId || e.regId === regId);
   }
 
   private async lease(body: Record<string, unknown>): Promise<LeaseResult> {
     const tunnelId = String(body.tunnelId ?? '');
+    const regId = String(body.regId ?? '');
     const want = Math.max(0, Number(body.want ?? 0));
     const commit = Math.max(0, Number(body.commit ?? 0));
-    this.rollPeriods(new Date());
+    const now = new Date();
+    this.rollPeriods(now);
+    this.reap(now.getTime());
     this.addRaw(body.raw as UsageDelta | undefined);
-    if (commit > 0) this.applyCommit(tunnelId, commit);
 
-    if (!this.config || !this.open.has(tunnelId)) {
+    const e = this.open.get(tunnelId);
+    // Superseded socket or reaped/unknown entry → no grant. `notOpen` tells a live
+    // caller to re-authorize and retry (self-heals an over-eager reap).
+    if (!this.config || !this.owns(e, regId)) {
       await this.persistUsage();
-      return { grant: 0, over: true, rate: this.snapshot() };
+      return { grant: 0, over: true, notOpen: !e, rate: this.snapshot() };
     }
 
+    if (commit > 0) this.applyCommit(tunnelId, commit);
+    e.seen = now.getTime();
     const headroom = Math.min(this.dayRemaining(), this.monthRemaining());
     const grant = Math.max(0, Math.min(want, this.config.leaseChunk, headroom));
     if (grant > 0) {
-      this.open.set(tunnelId, (this.open.get(tunnelId) ?? 0) + grant);
+      e.lease += grant;
       this.usage.leased += grant;
-      await this.persistOpen();
     }
+    await this.persistOpen();
     await this.persistUsage();
     const rate = this.snapshot();
     return { grant, over: rate.day.remaining <= 0 || rate.month.remaining <= 0, rate };
@@ -261,10 +318,19 @@ export class AccountDO extends DurableObject<MeteringEnv> {
 
   private async close(body: Record<string, unknown>): Promise<{ ok: true }> {
     const tunnelId = String(body.tunnelId ?? '');
+    const regId = String(body.regId ?? '');
     const consumed = Math.max(0, Number(body.consumed ?? 0));
     const seconds = Math.max(0, Number(body.seconds ?? 0));
     this.rollPeriods(new Date());
     this.addRaw(body.raw as UsageDelta | undefined);
+
+    const e = this.open.get(tunnelId);
+    // Ignore a close from a socket that no longer owns this tunnelId (replace race):
+    // the new owner's entry must survive.
+    if (!this.owns(e, regId)) {
+      await this.persistUsage();
+      return { ok: true };
+    }
 
     this.applyCommit(tunnelId, consumed);
     if (seconds > 0) {
@@ -274,8 +340,7 @@ export class AccountDO extends DurableObject<MeteringEnv> {
     }
     // Return any lease the tunnel never consumed (recovers stranded budget after
     // a hibernation that lost the tunnel's local counter).
-    const rem = this.open.get(tunnelId) ?? 0;
-    this.usage.leased = Math.max(0, this.usage.leased - rem);
+    this.usage.leased = Math.max(0, this.usage.leased - e.lease);
     this.open.delete(tunnelId);
     await this.persistOpen();
     await this.persistUsage();
