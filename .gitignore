@@ -8,3 +8,5 @@ server/test-results/
 server-cf/.wrangler/
 server-cf/.dev.vars
 .wrangler/
+server-cf/.root-token
+server-cf/.proof-*

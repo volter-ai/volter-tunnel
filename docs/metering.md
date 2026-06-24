@@ -1,7 +1,11 @@
 # Tunnel metering & accounts
 
-Status: **implemented** in `server-cf/` (Cloudflare Workers relay). Tests:
-`server-cf/test/metering.test.ts` (real workerd).
+Status: **implemented + deployed + proven live.** Code in `server-cf/`. Automated
+tests in `server-cf/test/metering.test.ts` (21 cases, real workerd). Proven
+end-to-end over the internet against the deployed relay via
+`server-cf/proof-metering.ts` (account create → api token → real tunnel →
+exactly-N-then-429 cutoff with RateLimit-*/Retry-After headers → usage drained →
+legacy TUNNEL_SECRET back-compat). All green.
 
 The relay is fronted on Cloudflare's metered Durable Object product, so usage is
 our cost of goods. The metering system exists to make **runaway spend
