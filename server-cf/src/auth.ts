@@ -34,6 +34,9 @@ export interface Env extends MeteringEnv {
   INSPECT_MAX?: string;
   /** Max captured request-body bytes stored per request (default 65536). */
   INSPECT_BODY_MAX?: string;
+  /** Comma-separated subdomain labels that serve the apex front door / management
+   *  plane instead of being tunnels (e.g. `www`). Default: `www`. */
+  RESERVED_HOSTS?: string;
 }
 
 /**

@@ -21,6 +21,19 @@ function routeToDO(env: Env, name: string, request: Request): Promise<Response> 
   return env.TUNNEL.get(id).fetch(request);
 }
 
+/** Subdomain labels that are NOT tunnels — they serve the apex front door /
+ *  management plane instead (so `www.<domain>` shows the landing page rather
+ *  than being a tunnel named "www", and nobody can reserve a tunnel that shadows
+ *  them). Override via RESERVED_HOSTS (comma-separated); default `www`. */
+function isReservedHost(env: Env, label: string): boolean {
+  const raw = (env.RESERVED_HOSTS ?? 'www').toLowerCase();
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .includes(label.toLowerCase());
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -51,9 +64,12 @@ export default {
     // On a tunnel subdomain EVERYTHING forwards to the tunnel — paths like
     // /admin, /signup, /report are management routes only on the apex, never on a
     // tunnel host (otherwise a tunneled app's own /signup page would be hijacked).
-    if (tunnelId) return routeToDO(env, tunnelId, request);
+    // Reserved labels (e.g. `www`) are NOT tunnels — they fall through to the apex
+    // front door below so `www.<domain>` serves the landing page.
+    if (tunnelId && !isReservedHost(env, tunnelId)) return routeToDO(env, tunnelId, request);
 
-    // Apex (no subdomain): management plane (admin), self-serve signup (#2,
+    // Apex (no subdomain) or a reserved host: management plane (admin), self-serve
+    // signup (#2,
     // unauthenticated — identity via GitHub), and abuse reports (#3). All share
     // the single RegistryDO.
     if (
