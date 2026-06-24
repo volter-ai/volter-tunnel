@@ -27,6 +27,13 @@ export interface Env extends MeteringEnv {
   BURST_RPS?: string;
   /** Token-bucket capacity for BURST_RPS (max instantaneous burst). Default 2×RPS. */
   BURST_SIZE?: string;
+  /** Inspector replay + persisted history (#10): 'true'/'1' captures request
+   *  detail to DO storage (survives hibernation) and enables /__volter_replay. */
+  INSPECT_REPLAY?: string;
+  /** Max captured requests retained for replay (default 50). */
+  INSPECT_MAX?: string;
+  /** Max captured request-body bytes stored per request (default 65536). */
+  INSPECT_BODY_MAX?: string;
 }
 
 /**

@@ -76,12 +76,22 @@ interface PendingUpgrade {
  *  or headers; persistence/replay is the paid #10. In-memory, so the buffer is
  *  lost on hibernation (fine for a live view of an actively-used tunnel). */
 interface InspectEntry {
+  id: string;
   t: number;
   method: string;
   path: string;
   status: number | null;
   ms: number | null;
   bytes: number | null;
+}
+
+/** A captured request stored for replay (#10). Body is base64, size-capped. */
+interface Capture {
+  method: string;
+  path: string;
+  headers: Record<string, string>;
+  body: string | null;
+  at: number;
 }
 
 /** Charge relayed messages (stream chunks / WS frames) in batches of this many,
@@ -146,15 +156,36 @@ export class TunnelDO extends DurableObject<Env> {
    *  hibernation — lenient, it only bounds bursts while the DO is resident). */
   private burst: BurstState = { tokens: 0, last: 0, init: false };
 
-  /** Live request inspector ring (#5; in-memory, lost on hibernation). */
+  /** Live request inspector ring (#5; in-memory, persisted to storage when
+   *  INSPECT_REPLAY is on so it survives hibernation — #10). */
   private inspect: InspectEntry[] = [];
   private inspectByReq = new Map<string, InspectEntry>();
+  /** Captured requests for replay (#10), keyed by reqId. Persisted when enabled. */
+  private captures = new Map<string, Capture>();
 
-  /** Record a request as it starts; trims the ring to INSPECT_CAP. */
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    // Only touch storage when replay/persistence is on — otherwise the inspector
+    // is purely in-memory (#5) and a cold DO does no extra reads.
+    if (env.INSPECT_REPLAY === 'true' || env.INSPECT_REPLAY === '1') {
+      ctx.blockConcurrencyWhile(async () => {
+        this.inspect = (await ctx.storage.get<InspectEntry[]>('inspect')) ?? [];
+        const caps = (await ctx.storage.get<Record<string, Capture>>('captures')) ?? {};
+        this.captures = new Map(Object.entries(caps));
+      });
+    }
+  }
+
+  private get replayEnabled(): boolean {
+    return this.env.INSPECT_REPLAY === 'true' || this.env.INSPECT_REPLAY === '1';
+  }
+
+  /** Record a request as it starts; trims the ring to its cap. */
   private pushInspect(reqId: string, method: string, path: string): void {
-    const e: InspectEntry = { t: Date.now(), method, path, status: null, ms: null, bytes: null };
+    const e: InspectEntry = { id: reqId, t: Date.now(), method, path, status: null, ms: null, bytes: null };
     this.inspect.push(e);
-    if (this.inspect.length > INSPECT_CAP) this.inspect.shift();
+    const cap = envNum(this.env.INSPECT_MAX, INSPECT_CAP);
+    while (this.inspect.length > cap) this.inspect.shift();
     this.inspectByReq.set(reqId, e);
   }
   /** Fill in a request's outcome (status, latency, response size) on completion. */
@@ -165,6 +196,27 @@ export class TunnelDO extends DurableObject<Env> {
     e.ms = Date.now() - e.t;
     e.bytes = bytes;
     this.inspectByReq.delete(reqId);
+    if (this.replayEnabled) void this.ctx.storage.put('inspect', this.inspect).catch(() => {});
+  }
+
+  /** Persist a captured request for later replay (#10), trimming to INSPECT_MAX. */
+  private async captureForReplay(
+    id: string,
+    method: string,
+    path: string,
+    headers: Record<string, string>,
+    bodyBytes: Uint8Array | null
+  ): Promise<void> {
+    const maxBody = envNum(this.env.INSPECT_BODY_MAX, 65536);
+    const body = bodyBytes && bodyBytes.length && bodyBytes.length <= maxBody ? b64encode(bodyBytes) : null;
+    this.captures.set(id, { method, path, headers, body, at: Date.now() });
+    const cap = envNum(this.env.INSPECT_MAX, INSPECT_CAP);
+    while (this.captures.size > cap) {
+      const oldest = this.captures.keys().next().value;
+      if (oldest === undefined) break;
+      this.captures.delete(oldest);
+    }
+    await this.ctx.storage.put('captures', Object.fromEntries(this.captures));
   }
 
   // ── metering state (ephemeral; safe to lose on hibernation) ────────────────
@@ -437,7 +489,10 @@ export class TunnelDO extends DurableObject<Env> {
   }
 
   // ── inbound HTTP ──────────────────────────────────────────────────────────
-  private async handleHttpRequest(request: Request, url: URL): Promise<Response> {
+  // `isReplay` (#10) marks an internally re-issued capture: it has already been
+  // authorized via the auth-gated /__volter_replay endpoint, so it skips the
+  // burst/auth/endpoint preamble and goes straight to meter + forward.
+  private async handleHttpRequest(request: Request, url: URL, isReplay = false): Promise<Response> {
     // Answer CORS preflight BEFORE the connectivity check (mirrors server.mjs) so
     // a momentarily-down tunnel doesn't surface a CORS error to the browser.
     if (request.method === 'OPTIONS') {
@@ -452,7 +507,7 @@ export class TunnelDO extends DurableObject<Env> {
     // Per-tunnel request-rate burst limit (#4) — cheap flood guard ahead of auth
     // and forwarding. The daily/monthly credit caps remain the primary limit.
     const rps = envNum(this.env.BURST_RPS, 0);
-    if (rps > 0) {
+    if (!isReplay && rps > 0) {
       const retry = burstStep(this.burst, Date.now(), rps, envNum(this.env.BURST_SIZE, rps * 2));
       if (retry > 0) {
         return new Response('Too Many Requests', {
@@ -465,7 +520,7 @@ export class TunnelDO extends DurableObject<Env> {
     // Basic-auth gate (#6): if the tunnel was registered with credentials, every
     // inbound request must present a matching Authorization: Basic header before
     // anything is served or forwarded (independent of the JWT layer below).
-    if (attach.basicAuthHash && !(await this.checkBasicAuth(request, attach.basicAuthHash))) {
+    if (!isReplay && attach.basicAuthHash && !(await this.checkBasicAuth(request, attach.basicAuthHash))) {
       return new Response('Authentication required', {
         status: 401,
         headers: {
@@ -476,7 +531,7 @@ export class TunnelDO extends DurableObject<Env> {
     }
 
     let bootstrapCookie: string | null = null;
-    if (attach.authRequired && this.env.JWT_SECRET) {
+    if (!isReplay && attach.authRequired && this.env.JWT_SECRET) {
       const auth = await validateAuth(request, url, this.env.JWT_SECRET, {
         tunnelId: attach.tunnelId,
         requireTid: this.env.REQUIRE_TID === 'true',
@@ -492,11 +547,31 @@ export class TunnelDO extends DurableObject<Env> {
 
     // Live request inspector (#5): recent request metadata, served on a reserved
     // path (never forwarded) and gated by the same auth as the tunnel above.
-    if (url.pathname === '/__volter_inspect') {
+    if (!isReplay && url.pathname === '/__volter_inspect') {
       return Response.json(
-        { tunnelId: attach.tunnelId, entries: this.inspect },
+        { tunnelId: attach.tunnelId, entries: this.inspect, replay: this.replayEnabled },
         { headers: corsHeaders(request) }
       );
+    }
+
+    // Replay a captured request (#10): re-issue it through the tunnel. Gated by
+    // the same auth above; only available when INSPECT_REPLAY is enabled.
+    if (!isReplay && url.pathname === '/__volter_replay' && request.method === 'POST') {
+      if (!this.replayEnabled) {
+        return Response.json({ error: 'replay not enabled' }, { status: 404, headers: corsHeaders(request) });
+      }
+      const b = (await request.json().catch(() => ({}))) as { id?: string };
+      const cap = b.id ? this.captures.get(b.id) : undefined;
+      if (!cap) {
+        return Response.json({ error: 'no such captured request' }, { status: 404, headers: corsHeaders(request) });
+      }
+      const replayUrl = new URL(`https://${attach.tunnelId}.${this.env.TUNNEL_DOMAIN}${cap.path}`);
+      const synth = new Request(replayUrl.toString(), {
+        method: cap.method,
+        headers: cap.headers,
+        body: cap.body ? b64decode(cap.body) : undefined,
+      });
+      return this.handleHttpRequest(synth, replayUrl, true);
     }
 
     const forwardPath = stripTokenParam(url.pathname + url.search);
@@ -536,6 +611,9 @@ export class TunnelDO extends DurableObject<Env> {
 
     const reqId = crypto.randomUUID();
     this.pushInspect(reqId, request.method, url.pathname);
+    if (!isReplay && this.replayEnabled) {
+      await this.captureForReplay(reqId, request.method, forwardPath, forwardHeaders, bodyBytes);
+    }
     return await new Promise<Response>((resolve) => {
       const timer = setTimeout(() => {
         this.pendingHttp.delete(reqId);
