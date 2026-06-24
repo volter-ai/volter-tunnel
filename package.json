@@ -43,5 +43,8 @@
     "@types/ws": "^8.5.14",
     "jsonwebtoken": "^9.0.2",
     "typescript": "^5.0.0"
+  },
+  "optionalDependencies": {
+    "qrcode-terminal": "^0.12.0"
   }
 }

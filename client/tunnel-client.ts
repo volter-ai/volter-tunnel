@@ -866,6 +866,40 @@ function forwardRequest(
 // Prints the public URL to stdout, stays alive until SIGTERM/SIGINT.
 // ============================================================================
 
+/** A compact, copy-friendly connection banner for the CLI. Written to stderr so
+ *  stdout stays just the URL (scripts pipe it). Exported for testing. */
+export function formatConnectBanner(url: string, port: number): string {
+  return [
+    '',
+    '  🚇  Tunnel live',
+    `      ${url}`,
+    `      → forwarding to localhost:${port}`,
+    '      Ctrl+C to stop',
+    '',
+  ].join('\n');
+}
+
+/** Best-effort terminal QR of the URL (handy for opening on a phone). Uses the
+ *  optional `qrcode-terminal` dependency; silently skipped if it isn't present.
+ *  The non-literal import specifier keeps this typecheck-clean without types. */
+async function renderQr(url: string, write: (s: string) => void): Promise<void> {
+  try {
+    const spec = 'qrcode-terminal';
+    const mod = await import(spec);
+    const qr = (mod.default ?? mod) as {
+      generate: (text: string, opts: { small?: boolean }, cb: (out: string) => void) => void;
+    };
+    await new Promise<void>((resolve) => {
+      qr.generate(url, { small: true }, (out: string) => {
+        write('\n' + out + '\n');
+        resolve();
+      });
+    });
+  } catch {
+    /* optional dep absent → URL banner only */
+  }
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
 
@@ -877,7 +911,7 @@ if (import.meta.main) {
   const port = Number(flag('port'));
   if (!port) {
     console.error(
-      'Usage: bun run tunnel-client.ts --port <port> [--host <url>] [--tunnel-id <id>] [--auth-not-required]'
+      'Usage: bun run tunnel-client.ts --port <port> [--host <url>] [--tunnel-id <id>] [--auth-not-required] [--no-qr]'
     );
     process.exit(1);
   }
@@ -911,7 +945,14 @@ if (import.meta.main) {
   if (tunnelId) opts.tunnelId = tunnelId;
   if (authNotRequired) opts.authRequired = false;
   const handle = await createTunnel(opts);
-  console.log(handle.url);
+  console.log(handle.url); // stdout stays machine-readable (just the URL)
+
+  // Human-facing connection banner + optional QR → stderr, only on a real TTY
+  // (so piped/non-interactive use stays clean).
+  if (process.stderr.isTTY) {
+    process.stderr.write(formatConnectBanner(handle.url, port) + '\n');
+    if (!args.includes('--no-qr')) await renderQr(handle.url, (s) => process.stderr.write(s));
+  }
 
   const shutdown = () => {
     handle.close();
