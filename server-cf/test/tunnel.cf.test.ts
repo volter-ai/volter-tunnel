@@ -152,6 +152,22 @@ test('forwards an HTTP GET to the origin and relays the response', async () => {
   expect(res.body).toBe('hello from origin');
 });
 
+test('wildcard subdomains under a reserved id route to that tunnel (P1 #9)', async () => {
+  const one = await requestViaTunnel(relayPort, TUNNEL_ID, {
+    path: '/hello',
+    headers: { Host: `preview.${TUNNEL_ID}.${DOMAIN}` },
+  });
+  expect(one.status).toBe(200);
+  expect(one.body).toBe('hello from origin');
+
+  const deep = await requestViaTunnel(relayPort, TUNNEL_ID, {
+    path: '/hello',
+    headers: { Host: `a.b.${TUNNEL_ID}.${DOMAIN}` },
+  });
+  expect(deep.status).toBe(200);
+  expect(deep.body).toBe('hello from origin');
+});
+
 test('forwards a POST body and relays the echoed response', async () => {
   const res = await requestViaTunnel(relayPort, TUNNEL_ID, {
     path: '/echo',

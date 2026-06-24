@@ -24,13 +24,23 @@ export interface Env extends MeteringEnv {
   RESPONSE_HEADER_RULES?: string;
 }
 
-/** Extract the tunnelId from a Host header: `<id>.<domain>` → `<id>`. Port-tolerant. */
+/**
+ * Extract the tunnelId from a Host header. Port-tolerant.
+ *
+ * `<id>.<domain>` → `<id>`, and — wildcard support (P1 #9) — `*.<id>.<domain>`
+ * also → `<id>`: every label under a reserved id routes to that id's tunnel.
+ * Tunnel ids are single DNS labels (no dots), so the id is always the label
+ * adjacent to the base domain (the rightmost label of the subdomain portion);
+ * the leading labels are the wildcard prefix, left intact on the forwarded Host
+ * so the tunneled app can sub-route on them.
+ */
 export function getTunnelIdFromHost(host: string | null, domain: string): string | null {
   if (!host) return null;
   const hostname = host.split(':')[0];
   const suffix = '.' + domain;
   if (hostname.endsWith(suffix)) {
-    return hostname.slice(0, -suffix.length);
+    const sub = hostname.slice(0, -suffix.length);
+    return sub.slice(sub.lastIndexOf('.') + 1) || null;
   }
   return null;
 }
