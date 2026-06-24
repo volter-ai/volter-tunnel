@@ -12,6 +12,7 @@ import { type Env, getTunnelIdFromHost, handleCookieBootstrap } from './auth';
 import { TunnelDO } from './tunnel-do';
 import { AccountDO } from './account-do';
 import { RegistryDO } from './registry-do';
+import { docsPage, htmlResponse, landingPage } from './pages';
 
 export { TunnelDO, AccountDO, RegistryDO };
 
@@ -60,6 +61,7 @@ export default {
       url.pathname.startsWith('/admin/') ||
       url.pathname === '/signup' ||
       url.pathname.startsWith('/signup/') ||
+      url.pathname === '/waitlist' ||
       url.pathname === '/report'
     ) {
       const id = env.REGISTRY.idFromName('registry');
@@ -70,6 +72,13 @@ export default {
     }
     if (url.pathname === '/api/status') {
       return Response.json({ ok: true, relay: 'cloudflare-do' });
+    }
+    // Public front door (apex only): marketing landing + waitlist form, and docs.
+    if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '')) {
+      return htmlResponse(landingPage(env.TUNNEL_DOMAIN));
+    }
+    if (request.method === 'GET' && (url.pathname === '/docs' || url.pathname === '/docs/')) {
+      return htmlResponse(docsPage(env.TUNNEL_DOMAIN));
     }
     return new Response('volter-tunnel (cloudflare)', { status: 200 });
   },

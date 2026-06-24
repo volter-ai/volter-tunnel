@@ -23,7 +23,7 @@ const freePort = () =>
     });
   });
 
-function req(
+function reqOnce(
   relayPort: number,
   tunnelId: string,
   opts: { path: string; method?: string; body?: string; headers?: Record<string, string> }
@@ -47,6 +47,22 @@ function req(
     if (opts.body) r.write(opts.body);
     r.end();
   });
+}
+
+// The wrangler dev runtime occasionally evicts the worker isolate and answers an
+// in-flight request with a 503 "Your worker restarted mid-request… please try
+// again" — a harness artifact, not an app response. It auto-retries GET/HEAD but
+// not POST, so retry that specific transient ourselves to keep the suite stable.
+async function req(
+  relayPort: number,
+  tunnelId: string,
+  opts: { path: string; method?: string; body?: string; headers?: Record<string, string> }
+): Promise<{ status: number; body: string }> {
+  let res = await reqOnce(relayPort, tunnelId, opts);
+  if (res.status === 503 && res.body.includes('worker restarted')) {
+    res = await reqOnce(relayPort, tunnelId, opts);
+  }
+  return res;
 }
 
 let worker: Unstable_DevWorker;

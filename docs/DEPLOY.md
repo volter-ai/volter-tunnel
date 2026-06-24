@@ -66,6 +66,7 @@ BASE=https://<your-domain>
 
 # Apex responds
 curl -s $BASE/api/status                 # {"ok":true,"relay":"cloudflare-do"}
+curl -s $BASE/ | grep -o '<title>.*</title>'   # landing page; /docs serves the docs
 
 # Signup (must be on the allowlist if SIGNUP_ALLOWED_USERS is set)
 volter-tunnel login --host $BASE         # gh auth token → mints vta_ token
@@ -88,6 +89,13 @@ curl -s $BASE/admin/usage    -H "Authorization: Bearer $ROOT_TOKEN"
 - **Abuse**: anyone may `POST /report {"tunnelId","reason"}`; review with
   `GET /admin/reports` (root); revoke a handle with
   `DELETE /admin/reservations/<tunnelId>` (root) — frees the id + disconnects.
+- **Waitlist**: the apex serves a public landing page (`GET /`) + docs
+  (`GET /docs`); its form posts to `POST /waitlist`. Review requests with
+  `GET /admin/waitlist` (root). **Approve someone** by appending their GitHub
+  login to the allowlist secret and re-putting it:
+  `printf 'yueranyuan,newlogin' | wrangler secret put SIGNUP_ALLOWED_USERS`
+  (the waitlist is a request queue only — approval is the env-secret edit). A
+  user already on the allowlist who submits the form is told they can sign up now.
 - **Tune fair-use**: raise `BURST_RPS` if you see request floods; the daily/
   monthly credit caps are the primary limit.
 - **Rotate root**: `wrangler secret put ROOT_TOKEN` + redeploy (no lockout — the

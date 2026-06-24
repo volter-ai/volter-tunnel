@@ -96,6 +96,12 @@ npm test         # vitest: real Worker+DO + createTunnel, no mocks
 npm run deploy   # wrangler deploy (needs a CF zone for the wildcard host)
 ```
 
+The apex domain (no tunnel subdomain) serves a public **landing page** at `/`
+with a waitlist form, getting-started **docs** at `/docs`, and the management
+plane (`/admin`, `/signup`, `/report`, `/waitlist`). Tunnel subdomains forward
+every path to their tunnel. See [docs/DEPLOY.md](./docs/DEPLOY.md) for the
+operator runbook (incl. approving waitlist requests).
+
 ## Layout
 
 ```
