@@ -247,6 +247,21 @@ describe('public front door (landing + docs + waitlist)', () => {
     expect(res.body).toContain(DOMAIN);
   });
 
+  test('reserved host www.<domain> serves the landing page, not a tunnel', async () => {
+    const res = await get(port, '/', { host: `www.${DOMAIN}` });
+    expect(res.status).toBe(200);
+    expect(res.ctype).toContain('text/html');
+    expect(res.body).toContain('id="waitlist"');
+  });
+
+  test('a normal subdomain is still treated as a tunnel (not the landing page)', async () => {
+    const res = await get(port, '/', { host: `sometunnel.${DOMAIN}` });
+    // No client is connected for this id, so the tunnel path returns 502 — proving
+    // it routed to a TunnelDO rather than serving the apex landing page.
+    expect(res.status).toBe(502);
+    expect(res.body).not.toContain('id="waitlist"');
+  });
+
   test('apex GET /docs serves the docs page', async () => {
     const res = await get(port, '/docs');
     expect(res.status).toBe(200);
