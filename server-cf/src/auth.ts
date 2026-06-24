@@ -5,8 +5,9 @@
  * `jose` (WebCrypto-based; `jsonwebtoken` does not run on Workers).
  */
 import { jwtVerify } from 'jose';
+import type { MeteringEnv } from './metering-types';
 
-export interface Env {
+export interface Env extends MeteringEnv {
   TUNNEL: DurableObjectNamespace;
   TUNNEL_DOMAIN: string;
   TUNNEL_SECRET: string;
