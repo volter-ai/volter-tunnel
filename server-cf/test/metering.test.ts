@@ -77,13 +77,14 @@ function reqFull(
   port: number,
   tunnelId: string,
   path: string
-): Promise<{ status: number; headers: Record<string, string | string[] | undefined> }> {
+): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }> {
   return new Promise((resolve, reject) => {
     const r = http.request(
       { host: '127.0.0.1', port, path, method: 'GET', headers: { Host: `${tunnelId}.${DOMAIN}` } },
       (res) => {
-        res.on('data', () => {});
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers }));
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
       }
     );
     r.on('error', reject);
@@ -143,6 +144,10 @@ let capApi: string;
 let capService: string;
 let hdrApi: string;
 let pushApi: string;
+let monApi: string;
+let sharedApi: string;
+let revApi: string;
+let revService: string;
 
 beforeAll(async () => {
   // Hermetic start: DO storage persists in .wrangler/state across runs, which
@@ -232,6 +237,45 @@ beforeAll(async () => {
   pushApi = (await admin(port, 'POST', '/admin/accounts/push/tokens', push.json.serviceToken as string, {
     kind: 'api',
   })).json.token as string;
+
+  // mon: roomy daily cap but a tiny MONTHLY cap, so the month binds first.
+  const mon = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
+    slug: 'mon',
+    name: 'Mon',
+    dayLimit: 10,
+    monthLimit: 4,
+    leaseChunk: 1,
+    concurrentMax: 5,
+  });
+  monApi = (await admin(port, 'POST', '/admin/accounts/mon/tokens', mon.json.serviceToken as string, {
+    kind: 'api',
+  })).json.token as string;
+
+  // shared: one daily pool of 4 credits shared across multiple tunnels.
+  const shared = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
+    slug: 'shared',
+    name: 'Shared',
+    dayLimit: 4,
+    monthLimit: 1000,
+    leaseChunk: 1,
+    concurrentMax: 5,
+  });
+  sharedApi = (await admin(port, 'POST', '/admin/accounts/shared/tokens', shared.json.serviceToken as string, {
+    kind: 'api',
+  })).json.token as string;
+
+  // rev: for the token-revocation test.
+  const rev = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
+    slug: 'rev',
+    name: 'Rev',
+    dayLimit: 10,
+    monthLimit: 1000,
+    leaseChunk: 1,
+    concurrentMax: 5,
+  });
+  revService = rev.json.serviceToken as string;
+  revApi = (await admin(port, 'POST', '/admin/accounts/rev/tokens', revService, { kind: 'api' })).json
+    .token as string;
 }, 90000);
 
 afterAll(async () => {
@@ -276,19 +320,19 @@ describe('global ceiling invariant', () => {
   });
 
   test('cumulative allocation is enforced across accounts', async () => {
-    // allocated so far = acme(5)+cap(1000)+hdr(50)+push(5) = 1060; global day = 2000.
+    // allocated = acme5+cap1000+hdr50+push5+mon10+shared4+rev10 = 1084; global day = 2000.
     const beta = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
       slug: 'beta',
       dayLimit: 900,
       monthLimit: 1,
     });
-    expect(beta.status).toBe(201); // 1060+900=1960 ≤ 2000
+    expect(beta.status).toBe(201); // 1084+900=1984 ≤ 2000
     const gamma = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
       slug: 'gamma',
       dayLimit: 900,
       monthLimit: 1,
     });
-    expect(gamma.status).toBe(409); // 1960+900 = 2860 > 2000
+    expect(gamma.status).toBe(409); // 1984+900 = 2884 > 2000
   });
 });
 
@@ -524,6 +568,104 @@ describe('suspend / bad token', () => {
     expect(res.ok).toBe(false);
     expect(res.code).toBe(4003);
   }, 12000);
+});
+
+describe('monthly cutoff binds independently of daily', () => {
+  let tunnel: TunnelHandle;
+  beforeAll(async () => {
+    tunnel = await createTunnel({
+      port: originPort,
+      host: `http://127.0.0.1:${port}`,
+      tunnelId: 'mon-t',
+      secret: monApi,
+      authRequired: false,
+      logger: NO_LOG,
+    });
+  }, 15000);
+  afterAll(() => {
+    try {
+      tunnel?.close();
+    } catch {
+      /* ignore */
+    }
+  });
+
+  test('monthLimit requests succeed, then 429 with scope "month"', async () => {
+    const results = [];
+    for (let i = 0; i < 6; i++) results.push(await reqFull(port, 'mon-t', '/hello'));
+    expect(results.slice(0, 4).map((r) => r.status)).toEqual([200, 200, 200, 200]);
+    expect(results[4]!.status).toBe(429);
+    const body = JSON.parse(results[4]!.body);
+    expect(body.error).toBe('quota_exceeded');
+    expect(body.scope).toBe('month'); // daily (10) still had room; the month (4) bound
+  }, 20000);
+});
+
+describe('one account budget is shared across its tunnels', () => {
+  const tunnels: TunnelHandle[] = [];
+  beforeAll(async () => {
+    for (const id of ['shared-a', 'shared-b']) {
+      tunnels.push(
+        await createTunnel({
+          port: originPort,
+          host: `http://127.0.0.1:${port}`,
+          tunnelId: id,
+          secret: sharedApi,
+          authRequired: false,
+          logger: NO_LOG,
+        })
+      );
+    }
+  }, 20000);
+  afterAll(() => {
+    for (const t of tunnels) {
+      try {
+        t.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  test('two tunnels draw from the same daily pool (4), 5th request 429s', async () => {
+    // Interleave across both tunnels; the account-wide cap is what binds.
+    const order = ['shared-a', 'shared-b', 'shared-a', 'shared-b', 'shared-a'];
+    const statuses: number[] = [];
+    for (const id of order) statuses.push((await reqFull(port, id, '/hello')).status);
+    expect(statuses.slice(0, 4)).toEqual([200, 200, 200, 200]);
+    expect(statuses[4]).toBe(429); // pool exhausted regardless of which tunnel
+  }, 20000);
+});
+
+describe('token revocation', () => {
+  test('a revoked api token can no longer register', async () => {
+    // Works before revocation.
+    const before = rawRegister(port, 'rev-1', revApi);
+    expect((await before.result).ok).toBe(true);
+    try {
+      before.ws.close();
+    } catch {
+      /* ignore */
+    }
+
+    // Find + revoke the api token.
+    const list = await admin(port, 'GET', '/admin/accounts/rev/tokens', revService);
+    const apiTok = (list.json.tokens as Array<{ id: string; kind: string }>).find((t) => t.kind === 'api');
+    expect(apiTok).toBeTruthy();
+    const del = await admin(port, 'DELETE', `/admin/accounts/rev/tokens/${apiTok!.id}`, revService);
+    expect(del.status).toBe(200);
+
+    // Now the same token is rejected as a bad token.
+    const after = rawRegister(port, 'rev-2', revApi);
+    const res = await after.result;
+    try {
+      after.ws.close();
+    } catch {
+      /* ignore */
+    }
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe(4003);
+  }, 15000);
 });
 
 describe('legacy shared secret still works (internal account)', () => {
