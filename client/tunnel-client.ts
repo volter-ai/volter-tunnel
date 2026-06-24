@@ -73,10 +73,26 @@ interface TunnelRequest {
   body: string | null;
 }
 
+interface RateWindow {
+  limit: number;
+  remaining: number;
+  reset: number;
+}
+
 interface TunnelRegistered {
   type: 'registered';
   tunnelId: string;
   url: string;
+  /** Metering snapshot for this account (present when the relay meters usage). */
+  account?: { slug: string; day: RateWindow; month: RateWindow; level: 'ok' | 'warn' | 'exceeded' };
+}
+
+/** Pushed by the relay when the account's usage level changes (ok→warn→exceeded). */
+interface TunnelQuota {
+  type: 'quota';
+  level: 'ok' | 'warn' | 'exceeded';
+  day: RateWindow;
+  month: RateWindow;
 }
 
 interface TunnelWsUpgrade {
@@ -117,7 +133,8 @@ type TunnelMessage =
   | TunnelWsMessage
   | TunnelWsClose
   | TunnelRequestAbort
-  | TunnelError;
+  | TunnelError
+  | TunnelQuota;
 
 // ============================================================================
 // Safe WebSocket close helpers
@@ -392,8 +409,13 @@ export function createTunnel({
             port,
             tunnelId: msg.tunnelId,
             url: msg.url,
+            account: msg.account?.slug,
+            dayRemaining: msg.account?.day.remaining,
+            dayLimit: msg.account?.day.limit,
           },
-          `Tunnel registered: localhost:${port} → ${msg.url}`
+          msg.account
+            ? `Tunnel registered: localhost:${port} → ${msg.url} (${msg.account.slug}: ${msg.account.day.remaining}/${msg.account.day.limit} credits today)`
+            : `Tunnel registered: localhost:${port} → ${msg.url}`
         );
         onRegistered({
           url: msg.url,
@@ -409,6 +431,21 @@ export function createTunnel({
             ws.close();
           },
         });
+      }
+
+      if (msg.type === 'quota') {
+        const line = `Tunnel quota ${msg.level}: ${msg.day.remaining}/${msg.day.limit} credits remaining today`;
+        const ctx = {
+          component: 'tunnel_client',
+          action: 'quota',
+          level: msg.level,
+          dayRemaining: msg.day.remaining,
+          dayLimit: msg.day.limit,
+          monthRemaining: msg.month.remaining,
+        };
+        if (msg.level === 'ok') log.info(ctx, line);
+        else log.warn(ctx, line);
+        return;
       }
 
       if (msg.type === 'request') {
