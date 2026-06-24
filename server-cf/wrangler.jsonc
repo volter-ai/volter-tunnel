@@ -39,12 +39,14 @@
   // Global = Σ(account limits) ceiling.
   "vars": {
     "TUNNEL_DOMAIN": "voltertest.xyz",
-    // Full per-tunnel isolation: a data-plane JWT MUST carry a `tid` claim matching
-    // the tunnel (the gateway mints these via /api/tunnel/token). Reject tokens
-    // without one — closes cross-tenant viewing of authRequired tunnels. Revert by
-    // setting "false" (or removing) + redeploy if a preview path still sends a
-    // session token. Only affects authRequired:true tunnels.
-    "REQUIRE_TID": "true",
+    // Per-tunnel viewer isolation. The full chain is BUILT + DEPLOYED (gateway
+    // mints tid tokens via /api/tunnel/token; frontend sends them; cookie scoped
+    // to .<tunnelId>.<domain>). Set "true" to ENFORCE (reject tokens lacking a
+    // matching `tid`) — do that ONLY after a signed-in browser smoke confirms a
+    // dev preview still loads (the cross-site iframe-cookie behavior is the one
+    // thing unit tests can't cover). Off = safe: tid tokens flow but aren't
+    // required. Only affects authRequired:true tunnels.
+    "REQUIRE_TID": "false",
     "INTERNAL_ACCOUNT": "volter-internal",
     "INTERNAL_DAY_LIMIT": "10000000",
     "INTERNAL_MONTH_LIMIT": "100000000",
