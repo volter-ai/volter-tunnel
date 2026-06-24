@@ -10,25 +10,32 @@ Last updated: 2026-06-24.
 
 ## Progress (branch `roadmap-buildout`)
 
-Shipped, tested, committed: **#1** idle-reclaim · **#2** GitHub signup (token
-exchange + gist proof, no OAuth app) · **#5** live inspector · **#6** basic-auth
-gate · **#7** header rewrite rules · **#8** CLI banner + QR · **#9** wildcard
-subdomains · **#3 (partial)** identity-gating (via #2) + per-account reserved-id
-count cap. Suite: 77 CF + 10 root green.
+**Phase 0 and Phase 1 are complete.** Shipped, tested, committed — suite: 87 CF
++ 10 root green:
 
-Signup uses the user's existing GitHub auth (no OAuth app to register) — see
-DECISIONS D4. That removed the only external blocker; nothing now waits on input
-except policy values / infra.
+- **#1** idle-reclaim of reserved tunnel IDs
+- **#2** GitHub signup — token exchange + gist proof, **no OAuth app** (DECISIONS D4)
+- **#3** abuse controls — identity-gating, signup allowlist (`SIGNUP_ALLOWED_USERS`),
+  per-account reserved-id count cap, handle revocation, abuse-report pipeline
+- **#4** fair-use limits — daily/monthly credit caps + concurrency (pre-existing)
+  plus a per-tunnel req/sec burst limiter (`BURST_RPS`, off by default)
+- **#5** live request inspector (`/__volter_inspect`)
+- **#6** HTTP basic-auth gate
+- **#7** configurable response-header rewrite rules
+- **#8** CLI connection banner + QR
+- **#9** wildcard subdomains under a reserved id
 
-Remaining:
-- **#3 (rest)** — handle revocation (cross-DO: TunnelDO clears reservation +
-  AccountDO release + close socket) and an abuse-report endpoint. Unblocked,
-  small; deferred as a focused follow-up.
-- **#4** — largely satisfied by the metering substrate; only short-window req/sec
-  burst is net-new and needs a policy threshold.
-- **#6 (OAuth-gating form)** — end-user OAuth in front of a tunnel (the basic-auth
-  form is shipped); can reuse the #2 GitHub plumbing.
-- **#10–#14** — Phase 2 (persistence/paid/infra).
+Also fixed a routing-collision bug: management paths (`/admin`, `/signup`,
+`/report`) are matched on the apex only; tunnel subdomains forward every path.
+
+Remaining — all **Phase 2** (paid / infra / decisions):
+- **#10** inspector replay w/ persisted history (builds on #5; DO storage)
+- **#11** higher/unlimited bandwidth tiers (raise #4 caps)
+- **#12** BYO custom hostname (needs CF-for-SaaS zone)
+- **#13** TCP/UDP tunnels (needs off-Cloudflare compute)
+- **#14** more concurrent tunnels beyond free cap (raise `concurrentMax`)
+- **#6 OAuth-gating variant** — end-user OAuth in front of a tunnel (basic-auth
+  form shipped); can reuse the #2 GitHub plumbing.
 
 ---
 
