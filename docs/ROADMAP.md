@@ -10,19 +10,25 @@ Last updated: 2026-06-24.
 
 ## Progress (branch `roadmap-buildout`)
 
-Shipped, tested, committed: **#1** idle-reclaim · **#7** header rewrite rules ·
-**#9** wildcard subdomains · **#8** CLI banner + QR · **#5** live inspector ·
-**#6** basic-auth gate · **#3 (partial)** per-account reserved-id count cap.
-Suite: 72 CF + 10 root green.
+Shipped, tested, committed: **#1** idle-reclaim · **#2** GitHub signup (token
+exchange + gist proof, no OAuth app) · **#5** live inspector · **#6** basic-auth
+gate · **#7** header rewrite rules · **#8** CLI banner + QR · **#9** wildcard
+subdomains · **#3 (partial)** identity-gating (via #2) + per-account reserved-id
+count cap. Suite: 77 CF + 10 root green.
+
+Signup uses the user's existing GitHub auth (no OAuth app to register) — see
+DECISIONS D4. That removed the only external blocker; nothing now waits on input
+except policy values / infra.
 
 Remaining:
-- **#4** — largely already satisfied by the metering substrate (daily/monthly
-  credit cutoff + concurrency + duration metering). Only short-window req/sec
-  burst is net-new, and it needs a policy threshold; deferred pending that call.
-- **#2** + rest of **#3** (identity-gating, handle revocation, abuse-report) and
-  the **OAuth** form of **#6** — all need a registered **GitHub OAuth App**
-  (client id + secret). Blocked on that input.
-- **#10/#11/#12/#13/#14** — Phase 2 (persistence/paid/infra).
+- **#3 (rest)** — handle revocation (cross-DO: TunnelDO clears reservation +
+  AccountDO release + close socket) and an abuse-report endpoint. Unblocked,
+  small; deferred as a focused follow-up.
+- **#4** — largely satisfied by the metering substrate; only short-window req/sec
+  burst is net-new and needs a policy threshold.
+- **#6 (OAuth-gating form)** — end-user OAuth in front of a tunnel (the basic-auth
+  form is shipped); can reuse the #2 GitHub plumbing.
+- **#10–#14** — Phase 2 (persistence/paid/infra).
 
 ---
 
