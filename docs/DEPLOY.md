@@ -35,6 +35,11 @@ All commands run from `server-cf/`.
 - `SIGNUP_ALLOWED_USERS` — **set this to enable allowlist mode** (comma-separated
   GitHub logins). UNSET/EMPTY = **open** signup. Kept as a secret so it isn't
   committed to a public repo.
+  **LAUNCH POLICY (DECISIONS D6): WAITLIST ONLY.** SET on the live worker (seeded
+  with `yueranyuan`) → signup is closed to the public; only listed logins can
+  self-provision, everyone else gets 403. To approve someone off the waitlist,
+  append their login and re-put:
+  `printf 'yueranyuan,newlogin' | wrangler secret put SIGNUP_ALLOWED_USERS`.
 - `JWT_SECRET` — optional; HS256 secret for end-user JWT/cookie auth on tunnels.
 - `TUNNEL_SECRET` — optional legacy shared secret → the internal account. Set it
   if your own gateway uses the shared-secret path; **omit for a pure-signup
