@@ -17,6 +17,11 @@
     { "tag": "v2", "new_sqlite_classes": ["AccountDO", "RegistryDO"] }
   ],
 
+  // Durable per-account usage time-series. Requires enabling Analytics Engine on
+  // the account first (dash.cloudflare.com → Workers → Analytics Engine); then
+  // uncomment this binding and redeploy. The recordAE() calls are no-ops until then.
+  // "analytics_engine_datasets": [{ "binding": "USAGE_AE", "dataset": "tunnel_usage" }],
+
   // Public base domain for tunnel URLs. Tunnel URLs are {tunnelId}.<this>.
   // Use a 1-level wildcard zone so free Universal SSL covers *.<domain>.
   // Override per-env / via `--var` in tests.

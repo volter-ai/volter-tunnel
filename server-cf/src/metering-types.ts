@@ -27,6 +27,10 @@ export interface MeteringEnv {
   DEFAULT_CONCURRENT?: string;
   /** Default lease chunk (credits handed to a tunnel per top-up). */
   DEFAULT_LEASE_CHUNK?: string;
+
+  /** Optional Analytics Engine dataset for durable per-account usage time-series.
+   *  Absent in local/test → rollups are skipped (best-effort). */
+  USAGE_AE?: AnalyticsEngineDataset;
 }
 
 /** Authoritative per-account configuration (lives in the AccountDO). */
