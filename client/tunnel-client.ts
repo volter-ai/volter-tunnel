@@ -845,8 +845,13 @@ if (import.meta.main) {
     process.exit(1);
   }
 
+  // Default to the Cloudflare Workers + Durable Objects relay. The old Fly relay
+  // (vgit-tunnels.volterapp.com) returns HTTP 200 instead of 101 on HTTP/2
+  // WebSocket upgrades, which breaks browser-based flows (e.g. QA proofs).
   const host =
-    flag('host') || process.env.TUNNEL_SERVER_URL || 'https://vgit-tunnels.volterapp.com';
+    flag('host') ||
+    process.env.TUNNEL_SERVER_URL ||
+    'https://volter-tunnel.aaron-0ed.workers.dev';
   const secret = process.env.TUNNEL_SECRET;
   const tunnelId = flag('tunnel-id');
   const authNotRequired = args.includes('--auth-not-required');
