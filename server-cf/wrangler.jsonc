@@ -85,7 +85,11 @@
   // (clients connect to <host>/ws?id=...). The wildcard route serves tunnel data.
   "workers_dev": true,
   "routes": [
-    { "pattern": "*.voltertest.xyz/*", "zone_name": "voltertest.xyz" }
+    { "pattern": "*.voltertest.xyz/*", "zone_name": "voltertest.xyz" },
+    // Bare apex serves the public front door (landing/docs/management). The apex
+    // DNS is already proxied; the wildcard cert above doesn't match the apex, so
+    // it needs its own route. Universal SSL covers the apex hostname.
+    { "pattern": "voltertest.xyz/*", "zone_name": "voltertest.xyz" }
   ]
 
   // Secrets (set via `wrangler secret put` in prod, `.dev.vars` locally):
