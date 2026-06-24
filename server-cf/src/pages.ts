@@ -37,6 +37,9 @@ const STYLE = /* css */ `
   a { color: var(--npm-red); text-decoration: none; }
   a:hover { text-decoration: underline; color: var(--npm-red-hover); }
 
+  /* npm's signature rainbow top strip */
+  .npm-bar { height: 5px; width: 100%; background: linear-gradient(to right, #f98a33, #cb3837, #c13285, #9d368e); }
+
   .wrap { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
 
   header.nav {
@@ -63,9 +66,9 @@ const STYLE = /* css */ `
     border: 1px solid var(--border-color); color: var(--text-color); background: #fff; cursor: pointer;
     transition: all 0.2s ease;
   }
-  .btn.primary { background: var(--npm-red); border-color: var(--npm-red); color: #fff; }
-  .btn:hover { text-decoration: none; border-color: var(--npm-red); transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-  .btn.primary:hover { background: var(--npm-red-hover); border-color: var(--npm-red-hover); }
+  .btn.primary { background: #1a1a1a; border-color: #1a1a1a; color: #fff; }
+  .btn:hover { text-decoration: none; border-color: #000; transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+  .btn.primary:hover { background: #000; border-color: #000; }
 
   pre.term {
     text-align: left; background: var(--bg-light-gray); border: 1px solid var(--border-color); border-radius: 0 0 6px 6px;
@@ -83,7 +86,9 @@ const STYLE = /* css */ `
 
   section { border-top: 1px solid var(--border-color); padding: 80px 0; }
   section.bg-gray { background: var(--bg-light-gray); }
-  section h2 { font-size: 36px; margin: 0 0 16px; font-weight: 600; letter-spacing: -.8px; }
+  section h2 { font-size: 36px; margin: 0 0 16px; font-weight: 600; letter-spacing: -.8px; position: relative; padding-bottom: 16px; }
+  /* npm-style short colored underline under each section heading (--accent per section) */
+  section h2::after { content: ""; position: absolute; left: 0; bottom: 0; width: 46px; height: 3px; border-radius: 2px; background: var(--accent, var(--npm-red)); }
   section .lede { color: var(--text-color-light); font-size: 18px; line-height: 1.7; margin: 0 0 50px; max-width: 680px; }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 30px; }
@@ -193,7 +198,7 @@ function shell(title: string, body: string): string {
 <meta name="description" content="volter-tunnel — free, stable, reservable tunnel URLs. An open-source ngrok alternative on Cloudflare's edge.">
 <link rel="icon" href="${FAVICON}">
 <style>${STYLE}</style>
-</head><body>${body}</body></html>`;
+</head><body><div class="npm-bar"></div>${body}</body></html>`;
 }
 
 function nav(): string {
@@ -255,7 +260,7 @@ export function landingPage(domain: string): string {
       </div>
     </div></div>
 
-    <section id="features" class="bg-gray"><div class="wrap">
+    <section id="features" class="bg-gray" style="--accent:#cb3837"><div class="wrap">
       <h2>Why volter-tunnel</h2>
       <p class="lede">Everything ngrok charges for at the free-tier boundary — given away, because idle tunnels are
         genuinely free to run on Cloudflare Durable Objects.</p>
@@ -285,7 +290,7 @@ export function landingPage(domain: string): string {
       </div>
     </div></section>
 
-    <section id="start"><div class="wrap">
+    <section id="start" style="--accent:#f98a33"><div class="wrap">
       <h2>Quickstart</h2>
       <p class="lede">Three steps once you're off the waitlist. Full reference in the <a href="/docs">docs</a>.</p>
       <div class="steps-grid">
@@ -310,7 +315,7 @@ export function landingPage(domain: string): string {
       </div>
     </div></section>
 
-    <section id="waitlist" class="bg-gray"><div class="wrap">
+    <section id="waitlist" class="bg-gray" style="--accent:#c13285"><div class="wrap">
       <h2>Request access</h2>
       <p class="lede">We're rolling out by invite while we scale. Drop your GitHub username and we'll add you to the
         allowlist — you'll log in with that same GitHub account.</p>
