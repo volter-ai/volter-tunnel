@@ -326,6 +326,12 @@ describe('management API + tokens', () => {
     expect(r.status).toBe(401);
   });
 
+  test('only the configured ROOT_TOKEN authenticates as root', async () => {
+    // A different root-looking token is not the live env secret → rejected.
+    const r = await admin(port, 'GET', '/admin/accounts', 'vtr_someoneelsestokennnnnnnnnnnnnnnnnnnnnn');
+    expect(r.status).toBe(401);
+  });
+
   test('a service token cannot create an account (root only)', async () => {
     const r = await admin(port, 'POST', '/admin/accounts', acmeService, {
       slug: 'sneaky',

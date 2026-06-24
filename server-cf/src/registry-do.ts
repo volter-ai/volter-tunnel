@@ -48,6 +48,10 @@ function json(data: unknown, status = 200): Response {
 }
 
 export class RegistryDO extends DurableObject<MeteringEnv> {
+  /** Hash of the current ROOT_TOKEN env secret, memoized per instance. The CF
+   *  secret is the single source of truth — NOT persisted — so rotating root is
+   *  just `wrangler secret put ROOT_TOKEN` + redeploy, and losing the local copy
+   *  never locks anyone out (set a new secret and it takes effect immediately). */
   private rootHash: string | null = null;
   private accounts = new Map<string, DirEntry>();
   private tokens = new Map<string, TokenRecord>();
@@ -56,7 +60,6 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
   constructor(ctx: DurableObjectState, env: MeteringEnv) {
     super(ctx, env);
     this.loaded = ctx.blockConcurrencyWhile(async () => {
-      this.rootHash = (await ctx.storage.get<string>('rootHash')) ?? null;
       this.accounts = new Map(Object.entries((await ctx.storage.get<Record<string, DirEntry>>('accounts')) ?? {}));
       this.tokens = new Map(Object.entries((await ctx.storage.get<Record<string, TokenRecord>>('tokens')) ?? {}));
     });
@@ -69,12 +72,13 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     await this.ctx.storage.put('tokens', Object.fromEntries(this.tokens));
   }
 
-  /** Lazily hash the bootstrap ROOT_TOKEN into storage the first time we need it. */
-  private async ensureRootHash(): Promise<void> {
-    if (this.rootHash) return;
-    if (!this.env.ROOT_TOKEN) return;
+  /** Hash of the live ROOT_TOKEN env secret (memoized). Derived from env, never
+   *  stored, so a redeploy with a new secret rotates root immediately. */
+  private async currentRootHash(): Promise<string | null> {
+    if (this.rootHash) return this.rootHash;
+    if (!this.env.ROOT_TOKEN) return null;
     this.rootHash = await hashToken(this.env.ROOT_TOKEN);
-    await this.ctx.storage.put('rootHash', this.rootHash);
+    return this.rootHash;
   }
 
   private bearer(request: Request): string | null {
@@ -87,8 +91,8 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     const token = this.bearer(request);
     if (!token) return null;
     const hash = await hashToken(token);
-    await this.ensureRootHash();
-    if (this.rootHash && safeEqualHex(hash, this.rootHash)) return { kind: 'root' };
+    const rootHash = await this.currentRootHash();
+    if (rootHash && safeEqualHex(hash, rootHash)) return { kind: 'root' };
     for (const rec of this.tokens.values()) {
       if (rec.kind === 'service' && !rec.revokedAt && safeEqualHex(rec.hash, hash)) {
         return { kind: 'service', slug: rec.slug };
