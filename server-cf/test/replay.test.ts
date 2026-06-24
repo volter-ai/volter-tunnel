@@ -26,7 +26,7 @@ const freePort = () =>
 function req(
   relayPort: number,
   tunnelId: string,
-  opts: { path: string; method?: string; body?: string }
+  opts: { path: string; method?: string; body?: string; headers?: Record<string, string> }
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const r = http.request(
@@ -35,7 +35,7 @@ function req(
         port: relayPort,
         path: opts.path,
         method: opts.method ?? 'GET',
-        headers: { Host: `${tunnelId}.${DOMAIN}` },
+        headers: { Host: `${tunnelId}.${DOMAIN}`, ...(opts.headers ?? {}) },
       },
       (res) => {
         let b = '';
@@ -114,8 +114,9 @@ describe('inspector replay (#10)', () => {
     expect(first.status).toBe(200);
     expect(first.body).toBe('hook:1:payload');
 
-    // Find the captured request's id.
-    const insp = await req(relayPort, TUNNEL_ID, { path: '/__volter_inspect' });
+    // Find the captured request's id (owner-only endpoint → present the secret).
+    const auth = { Authorization: `Bearer ${SECRET}` };
+    const insp = await req(relayPort, TUNNEL_ID, { path: '/__volter_inspect', headers: auth });
     const data = JSON.parse(insp.body) as {
       replay: boolean;
       entries: Array<{ id: string; method: string; path: string }>;
@@ -129,17 +130,28 @@ describe('inspector replay (#10)', () => {
       path: '/__volter_replay',
       method: 'POST',
       body: JSON.stringify({ id: entry!.id }),
+      headers: auth,
     });
     expect(replay.status).toBe(200);
     expect(replay.body).toBe('hook:2:payload');
     expect(hookCount).toBe(2);
   }, 20000);
 
+  test('replay requires the tunnel secret (401 without it)', async () => {
+    const r = await req(relayPort, TUNNEL_ID, {
+      path: '/__volter_replay',
+      method: 'POST',
+      body: JSON.stringify({ id: 'whatever' }),
+    });
+    expect(r.status).toBe(401);
+  });
+
   test('replaying an unknown id is a 404', async () => {
     const r = await req(relayPort, TUNNEL_ID, {
       path: '/__volter_replay',
       method: 'POST',
       body: JSON.stringify({ id: 'nope' }),
+      headers: { Authorization: `Bearer ${SECRET}` },
     });
     expect(r.status).toBe(404);
   });

@@ -172,7 +172,14 @@ test('the live inspector records recent request metadata (P1 #5)', async () => {
   await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/hello' });
   await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/nope' }); // 404
 
-  const res = await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/__volter_inspect' });
+  // Owner-only: no secret → 401.
+  const noauth = await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/__volter_inspect' });
+  expect(noauth.status).toBe(401);
+
+  const res = await requestViaTunnel(relayPort, TUNNEL_ID, {
+    path: '/__volter_inspect',
+    headers: { Authorization: `Bearer ${SECRET}` },
+  });
   expect(res.status).toBe(200);
   const data = JSON.parse(res.body) as {
     tunnelId: string;

@@ -488,6 +488,18 @@ export class TunnelDO extends DurableObject<Env> {
     return safeEqual(await hashToken(decoded), expectedHash);
   }
 
+  /** Owner-only gate for the inspector/replay endpoints (#sec): the caller must
+   *  present the tunnel's own secret (api token or, for legacy, TUNNEL_SECRET).
+   *  This keeps request metadata private even on a public (authRequired=false)
+   *  tunnel — without forcing JWT auth on visitors, which would break sharing. */
+  private async inspectorAuthorized(request: Request, attach: CtlAttach): Promise<boolean> {
+    const bearer = (request.headers.get('authorization') || '').replace(/^Bearer /, '');
+    if (!bearer) return false;
+    if (attach.tokenHash) return safeEqual(await hashToken(bearer), attach.tokenHash);
+    if (attach.legacy && this.env.TUNNEL_SECRET) return safeEqual(bearer, this.env.TUNNEL_SECRET);
+    return false;
+  }
+
   // ── inbound HTTP ──────────────────────────────────────────────────────────
   // `isReplay` (#10) marks an internally re-issued capture: it has already been
   // authorized via the auth-gated /__volter_replay endpoint, so it skips the
@@ -548,17 +560,23 @@ export class TunnelDO extends DurableObject<Env> {
     // Live request inspector (#5): recent request metadata, served on a reserved
     // path (never forwarded) and gated by the same auth as the tunnel above.
     if (!isReplay && url.pathname === '/__volter_inspect') {
+      if (!(await this.inspectorAuthorized(request, attach))) {
+        return new Response('Unauthorized', { status: 401, headers: corsHeaders(request) });
+      }
       return Response.json(
         { tunnelId: attach.tunnelId, entries: this.inspect, replay: this.replayEnabled },
         { headers: corsHeaders(request) }
       );
     }
 
-    // Replay a captured request (#10): re-issue it through the tunnel. Gated by
-    // the same auth above; only available when INSPECT_REPLAY is enabled.
+    // Replay a captured request (#10): re-issue it through the tunnel. Owner-only
+    // (tunnel secret); only available when INSPECT_REPLAY is enabled.
     if (!isReplay && url.pathname === '/__volter_replay' && request.method === 'POST') {
       if (!this.replayEnabled) {
         return Response.json({ error: 'replay not enabled' }, { status: 404, headers: corsHeaders(request) });
+      }
+      if (!(await this.inspectorAuthorized(request, attach))) {
+        return new Response('Unauthorized', { status: 401, headers: corsHeaders(request) });
       }
       const b = (await request.json().catch(() => ({}))) as { id?: string };
       const cap = b.id ? this.captures.get(b.id) : undefined;
