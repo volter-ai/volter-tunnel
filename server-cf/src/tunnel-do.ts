@@ -43,6 +43,7 @@ interface PendingHttp {
 }
 interface Streaming {
   controller: ReadableStreamDefaultController<Uint8Array>;
+  idle: ReturnType<typeof setTimeout>;
 }
 interface PendingUpgrade {
   resolve: () => void;
@@ -69,6 +70,27 @@ function headersToObject(headers: Headers): Record<string, string> {
   return out;
 }
 
+/**
+ * Clamp a WebSocket close reason to 123 UTF-8 bytes (a control frame's reason is
+ * capped at 125 bytes minus the 2-byte code). close() throws RangeError otherwise
+ * — server.mjs added this guard after one oversized relayed reason crash-looped
+ * the whole relay. Drops a trailing replacement char from a severed sequence.
+ */
+function truncateReason(value: unknown): string {
+  const s = String(value ?? '');
+  const enc = new TextEncoder().encode(s);
+  if (enc.length <= 123) return s;
+  return new TextDecoder().decode(enc.subarray(0, 123)).replace(/�+$/, '');
+}
+
+/** Constant-time string compare for the shared secret (avoids early-exit timing). */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return r === 0;
+}
+
 export class TunnelDO extends DurableObject<Env> {
   private pendingHttp = new Map<string, PendingHttp>();
   private streaming = new Map<string, Streaming>();
@@ -81,7 +103,7 @@ export class TunnelDO extends DurableObject<Env> {
     // Control channel: the tunnel client connects to /ws?id=<tunnelId>.
     if (url.pathname === '/ws') {
       if (upgrade !== 'websocket') return new Response('expected websocket', { status: 426 });
-      return this.acceptControl();
+      return this.acceptControl(url);
     }
 
     // Browser-side WebSocket upgrade on a tunnel subdomain.
@@ -101,9 +123,13 @@ export class TunnelDO extends DurableObject<Env> {
     return ws ? (ws.deserializeAttachment() as CtlAttach) : null;
   }
 
-  private acceptControl(): Response {
+  private acceptControl(url: URL): Response {
+    // The Worker routed us via idFromName(?id=), so ?id= is the authoritative
+    // tunnelId for this DO — capture it so the registered URL always matches the
+    // subdomain the browser actually reaches (don't trust msg.tunnelId blindly).
+    const id = url.searchParams.get('id') || '';
     const { 0: client, 1: server } = new WebSocketPair();
-    const attach: CtlAttach = { role: 'ctl', registered: false, authRequired: true, tunnelId: '' };
+    const attach: CtlAttach = { role: 'ctl', registered: false, authRequired: true, tunnelId: id };
     server.serializeAttachment(attach);
     this.ctx.acceptWebSocket(server, ['ctl']);
     return new Response(null, { status: 101, webSocket: client });
@@ -111,13 +137,15 @@ export class TunnelDO extends DurableObject<Env> {
 
   // ── inbound HTTP ──────────────────────────────────────────────────────────
   private async handleHttpRequest(request: Request, url: URL): Promise<Response> {
+    // Answer CORS preflight BEFORE the connectivity check (mirrors server.mjs) so
+    // a momentarily-down tunnel doesn't surface a CORS error to the browser.
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsHeaders(request) });
+    }
     const ctl = this.ctl();
     const attach = this.ctlAttach();
     if (!ctl || !attach?.registered) {
-      return new Response('Tunnel not connected', { status: 502 });
-    }
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: corsHeaders(request) });
+      return new Response('Tunnel not connected', { status: 502, headers: corsHeaders(request) });
     }
 
     let bootstrapCookie: string | null = null;
@@ -137,24 +165,40 @@ export class TunnelDO extends DurableObject<Env> {
     const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
     const bodyBytes = hasBody ? new Uint8Array(await request.arrayBuffer()) : null;
 
+    // A DO WebSocket frame is capped at 1 MiB and base64 inflates ~33%; the whole
+    // body goes in one `request` frame. Reject oversized bodies fast with 413
+    // instead of letting ctl.send throw and the request hang to the 30s timeout.
+    if (bodyBytes && bodyBytes.length > 750_000) {
+      return new Response('Request body too large to tunnel (limit ~750KB)', {
+        status: 413,
+        headers: corsHeaders(request),
+      });
+    }
+
     const reqId = crypto.randomUUID();
     return await new Promise<Response>((resolve) => {
       const timer = setTimeout(() => {
         this.pendingHttp.delete(reqId);
         this.streaming.delete(reqId);
-        resolve(new Response('Tunnel timeout', { status: 504 }));
+        resolve(new Response('Tunnel timeout', { status: 504, headers: corsHeaders(request) }));
       }, 30000);
       this.pendingHttp.set(reqId, { resolve, timer, request, bootstrapCookie });
-      ctl.send(
-        JSON.stringify({
-          type: 'request',
-          reqId,
-          method: request.method,
-          path: forwardPath,
-          headers: forwardHeaders,
-          body: bodyBytes && bodyBytes.length ? b64encode(bodyBytes) : null,
-        })
-      );
+      try {
+        ctl.send(
+          JSON.stringify({
+            type: 'request',
+            reqId,
+            method: request.method,
+            path: forwardPath,
+            headers: forwardHeaders,
+            body: bodyBytes && bodyBytes.length ? b64encode(bodyBytes) : null,
+          })
+        );
+      } catch {
+        clearTimeout(timer);
+        this.pendingHttp.delete(reqId);
+        resolve(new Response('Tunnel send failed', { status: 502, headers: corsHeaders(request) }));
+      }
     });
   }
 
@@ -232,10 +276,19 @@ export class TunnelDO extends DurableObject<Env> {
     const attach = ws.deserializeAttachment() as CtlAttach | BrowserAttach | null;
     if (attach?.role === 'browser') {
       const ctl = this.ctl();
-      if (ctl) ctl.send(JSON.stringify({ type: 'ws-close', connId: attach.connId }));
+      if (ctl) {
+        try {
+          ctl.send(JSON.stringify({ type: 'ws-close', connId: attach.connId }));
+        } catch {
+          /* control gone */
+        }
+      }
       return;
     }
-    // Control socket gone → tear down all browser relays.
+    // Control socket gone → tear down EVERYTHING for this tunnel (mirrors
+    // server.mjs:751-794): close browser relays, fail pending requests/upgrades,
+    // error open streams. Without this, a client disconnect mid-stream leaks hung
+    // browser connections and never-resolving responses.
     for (const b of this.ctx.getWebSockets('browser')) {
       try {
         (b as WebSocket).close(1001, 'Tunnel disconnected');
@@ -243,6 +296,52 @@ export class TunnelDO extends DurableObject<Env> {
         /* ignore */
       }
     }
+    for (const [, p] of this.pendingHttp) {
+      clearTimeout(p.timer);
+      try {
+        p.resolve(new Response('Tunnel disconnected', { status: 502 }));
+      } catch {
+        /* already resolved */
+      }
+    }
+    this.pendingHttp.clear();
+    for (const [, s] of this.streaming) {
+      clearTimeout(s.idle);
+      try {
+        s.controller.error(new Error('Tunnel disconnected'));
+      } catch {
+        /* already closed */
+      }
+    }
+    this.streaming.clear();
+    for (const [, p] of this.pendingUpgrades) {
+      clearTimeout(p.timer);
+      p.reject(new Error('Tunnel disconnected'));
+    }
+    this.pendingUpgrades.clear();
+  }
+
+  /** Idle watchdog for a streaming response — if the client stalls without sending
+   *  response-end, error the stream and tell the client to abort. Reset per chunk. */
+  private armStreamIdle(reqId: string): ReturnType<typeof setTimeout> {
+    return setTimeout(() => {
+      const s = this.streaming.get(reqId);
+      if (!s) return;
+      this.streaming.delete(reqId);
+      try {
+        s.controller.error(new Error('stream idle timeout'));
+      } catch {
+        /* already closed */
+      }
+      const ctl = this.ctl();
+      if (ctl) {
+        try {
+          ctl.send(JSON.stringify({ type: 'request-abort', reqId }));
+        } catch {
+          /* control gone */
+        }
+      }
+    }, 120000);
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
@@ -254,7 +353,7 @@ export class TunnelDO extends DurableObject<Env> {
     const type = msg.type as string;
 
     if (type === 'register') {
-      if (this.env.TUNNEL_SECRET && msg.secret !== this.env.TUNNEL_SECRET) {
+      if (this.env.TUNNEL_SECRET && !safeEqual(String(msg.secret ?? ''), this.env.TUNNEL_SECRET)) {
         ws.send(JSON.stringify({ type: 'error', message: 'Invalid tunnel secret' }));
         ws.close(4003, 'Invalid tunnel secret');
         return;
@@ -277,7 +376,11 @@ export class TunnelDO extends DurableObject<Env> {
         }
       }
 
-      const tunnelId = (msg.tunnelId as string) || crypto.randomUUID().slice(0, 8);
+      // Prefer the ?id= captured at accept (authoritative — it's how the Worker
+      // routed to this DO); fall back to msg.tunnelId, then a random id.
+      const existing = ws.deserializeAttachment() as CtlAttach | null;
+      const tunnelId =
+        existing?.tunnelId || (msg.tunnelId as string) || crypto.randomUUID().slice(0, 8);
       const authRequired = msg.authRequired !== false;
       ws.serializeAttachment({ role: 'ctl', registered: true, authRequired, tunnelId } satisfies CtlAttach);
       const url = `https://${tunnelId}.${this.env.TUNNEL_DOMAIN}`;
@@ -314,12 +417,20 @@ export class TunnelDO extends DurableObject<Env> {
       const self = this;
       const readable = new ReadableStream<Uint8Array>({
         start(controller) {
-          self.streaming.set(reqId, { controller });
+          self.streaming.set(reqId, { controller, idle: self.armStreamIdle(reqId) });
         },
         cancel() {
+          const s = self.streaming.get(reqId);
+          if (s) clearTimeout(s.idle);
           self.streaming.delete(reqId);
           const ctl = self.ctl();
-          if (ctl) ctl.send(JSON.stringify({ type: 'request-abort', reqId }));
+          if (ctl) {
+            try {
+              ctl.send(JSON.stringify({ type: 'request-abort', reqId }));
+            } catch {
+              /* control gone */
+            }
+          }
         },
       });
       pending.resolve(new Response(readable, { status: (msg.status as number) || 200, headers }));
@@ -331,7 +442,10 @@ export class TunnelDO extends DurableObject<Env> {
       if (s) {
         try {
           s.controller.enqueue(b64decode(msg.data as string));
+          clearTimeout(s.idle);
+          s.idle = this.armStreamIdle(msg.reqId as string);
         } catch {
+          clearTimeout(s.idle);
           this.streaming.delete(msg.reqId as string);
         }
       }
@@ -341,6 +455,7 @@ export class TunnelDO extends DurableObject<Env> {
     if (type === 'response-end') {
       const s = this.streaming.get(msg.reqId as string);
       if (s) {
+        clearTimeout(s.idle);
         this.streaming.delete(msg.reqId as string);
         try {
           s.controller.close();
@@ -376,8 +491,12 @@ export class TunnelDO extends DurableObject<Env> {
       const arr = this.ctx.getWebSockets(`c:${msg.connId}`);
       const browser = arr.length ? (arr[0] as WebSocket) : null;
       if (browser) {
-        const bytes = b64decode(msg.data as string);
-        browser.send(msg.binary ? bytes : new TextDecoder().decode(bytes));
+        try {
+          const bytes = b64decode(msg.data as string);
+          browser.send(msg.binary ? bytes : new TextDecoder().decode(bytes));
+        } catch {
+          /* malformed frame — drop it, keep the relay alive */
+        }
       }
       return;
     }
@@ -389,7 +508,7 @@ export class TunnelDO extends DurableObject<Env> {
         const raw = msg.code as number | undefined;
         const code = raw && raw >= 1000 && raw <= 4999 && raw !== 1005 && raw !== 1006 ? raw : 1000;
         try {
-          browser.close(code, (msg.reason as string) || '');
+          browser.close(code, truncateReason(msg.reason));
         } catch {
           /* ignore */
         }
