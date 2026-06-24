@@ -140,8 +140,12 @@ Vars: `TUNNEL_DOMAIN`, `INTERNAL_ACCOUNT`, `INTERNAL_DAY_LIMIT`,
 `GLOBAL_MONTH_LIMIT`, `DEFAULT_CONCURRENT`, `DEFAULT_LEASE_CHUNK`.
 Secrets: `TUNNEL_SECRET` (legacy), `JWT_SECRET`, `ROOT_TOKEN`.
 
-`ROOT_TOKEN` is hashed into the registry on first use. Rotate by changing the
-secret (the new value re-bootstraps the root hash on next admin call).
+`ROOT_TOKEN` is the **single source of truth** for root auth — derived from the
+env secret on each check, never persisted. **Rotate** it with
+`wrangler secret put ROOT_TOKEN` + `wrangler deploy`; the new value is effective
+immediately and the old one stops working. A lost copy is not a lockout — set a
+new secret and redeploy. Keep a durable copy in your password manager / secret
+store (the live worker secret is the only other copy; CF won't show it back).
 
 ## Bootstrap & migration
 
