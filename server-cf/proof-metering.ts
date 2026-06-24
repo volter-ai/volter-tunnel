@@ -74,19 +74,22 @@ async function main() {
   const slug = 'proof-' + Date.now().toString(36);
   console.log(`ROOT token loaded (len ${ROOT.length}); proof account = ${slug}`);
 
-  // 1. create account
+  // 1. create account IN DOLLARS (dayUsd/monthUsd) — 1 op = $0.000001, so
+  // dayUsd 0.000005 = 5 ops, giving a 5-request/day cap for the cutoff proof.
   const acct = await admin('POST', '/admin/accounts', ROOT, {
     slug,
     name: 'Live proof',
-    dayLimit: 5,
-    monthLimit: 100,
+    dayUsd: 0.000005,
+    monthUsd: 0.0001,
     leaseChunk: 1,
     concurrentMax: 5,
   });
-  console.log(`create account → ${acct.status}`);
+  console.log(`create account (via dollars) → ${acct.status}`);
   if (acct.status !== 201) throw new Error('account create failed: ' + JSON.stringify(acct.json));
   const service = acct.json.serviceToken as string;
+  const created = acct.json.account as { dayLimit: number };
   checks.push(['root created account + got service token', service?.startsWith('vts_' + slug + '_')]);
+  checks.push(['dollar amount converted to op-credits (dayUsd 0.000005 → 5)', created?.dayLimit === 5]);
 
   // 2. mint api token
   const tok = await admin('POST', `/admin/accounts/${slug}/tokens`, service, { kind: 'api', label: 'proof' });
@@ -133,11 +136,21 @@ async function main() {
   checks.push(['429 carried Retry-After', Number(overHeaders['retry-after']) > 0]);
   checks.push(['429 carried RateLimit-Remaining=0', overHeaders['ratelimit-remaining'] === '0']);
 
-  // 5. usage endpoint
+  // 5. usage endpoint (+ dollars surfaced)
   const usage = await admin('GET', `/admin/accounts/${slug}/usage`, service);
   const day = usage.json.day as { used: number; remaining: number; limit: number };
-  console.log(`usage day: ${JSON.stringify(day)}`);
+  const usd = usage.json.usd as { dayUsed: number; dayLimit: number } | undefined;
+  console.log(`usage day: ${JSON.stringify(day)} | usd: ${JSON.stringify(usd)}`);
   checks.push(['usage shows drained (remaining 0)', day?.remaining === 0 && day?.used >= 5]);
+  checks.push(['usage view surfaces dollars', typeof usd?.dayLimit === 'number']);
+
+  // 5b. internal account is gated in real money ($10/day) — proves the catch-all
+  // account is treated like any other, capped in dollars.
+  const internal = await admin('GET', '/admin/accounts/volter-internal/usage', ROOT);
+  const iUsd = internal.json.usd as { dayLimit: number } | undefined;
+  const iDay = internal.json.day as { limit: number } | undefined;
+  console.log(`internal: dayLimit=${iDay?.limit} ($${iUsd?.dayLimit}/day)`);
+  checks.push(['internal account capped at $10/day', iUsd?.dayLimit === 10 && iDay?.limit === 10000000]);
 
   tunnel.close();
   origin.close();

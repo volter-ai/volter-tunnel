@@ -23,6 +23,7 @@ import {
   isValidSlug,
   randomBase62,
   safeEqualHex,
+  usdToCredits,
 } from './credits';
 import {
   type AccountConfig,
@@ -237,9 +238,11 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     if (!isValidSlug(slug)) return json({ error: 'invalid slug (use a-z0-9-)' }, 400);
     if (this.accounts.has(slug)) return json({ error: 'account already exists' }, 409);
 
-    const dayLimit = Number(body.dayLimit ?? 0);
-    const monthLimit = Number(body.monthLimit ?? 0);
-    if (!(dayLimit > 0) || !(monthLimit > 0)) return json({ error: 'dayLimit and monthLimit required' }, 400);
+    // Accept limits as dollars (dayUsd/monthUsd) or raw op-credits (dayLimit/…).
+    const dayLimit = body.dayUsd !== undefined ? usdToCredits(Number(body.dayUsd)) : Number(body.dayLimit ?? 0);
+    const monthLimit =
+      body.monthUsd !== undefined ? usdToCredits(Number(body.monthUsd)) : Number(body.monthLimit ?? 0);
+    if (!(dayLimit > 0) || !(monthLimit > 0)) return json({ error: 'dayLimit/dayUsd and monthLimit/monthUsd required' }, 400);
     if (!this.fitsGlobal(slug, dayLimit, monthLimit)) {
       return json({ error: 'exceeds global ceiling — raise GLOBAL_*_LIMIT or lower this account' }, 409);
     }
@@ -324,8 +327,18 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     // Raising limits is the one thing a service token must never do.
     if (auth?.kind !== 'root') return json({ error: 'root token required to change limits' }, 403);
     const e = this.accounts.get(slug)!;
-    const dayLimit = body.dayLimit !== undefined ? Number(body.dayLimit) : e.dayLimit;
-    const monthLimit = body.monthLimit !== undefined ? Number(body.monthLimit) : e.monthLimit;
+    const dayLimit =
+      body.dayUsd !== undefined
+        ? usdToCredits(Number(body.dayUsd))
+        : body.dayLimit !== undefined
+          ? Number(body.dayLimit)
+          : e.dayLimit;
+    const monthLimit =
+      body.monthUsd !== undefined
+        ? usdToCredits(Number(body.monthUsd))
+        : body.monthLimit !== undefined
+          ? Number(body.monthLimit)
+          : e.monthLimit;
     if (!(dayLimit > 0) || !(monthLimit > 0)) return json({ error: 'limits must be positive' }, 400);
     if (!this.fitsGlobal(slug, dayLimit, monthLimit)) {
       return json({ error: 'exceeds global ceiling' }, 409);

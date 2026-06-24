@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
 import { rmSync } from 'node:fs';
-import { WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { type Unstable_DevWorker, unstable_dev } from 'wrangler';
 import { createTunnel, type TunnelHandle } from '../../client/tunnel-client.ts';
 
@@ -148,6 +148,9 @@ let monApi: string;
 let sharedApi: string;
 let revApi: string;
 let revService: string;
+let wscapApi: string;
+let dollarsService: string;
+let dollarsAccount: { dayLimit: number; monthLimit: number };
 
 beforeAll(async () => {
   // Hermetic start: DO storage persists in .wrangler/state across runs, which
@@ -162,6 +165,9 @@ beforeAll(async () => {
     res.writeHead(200);
     res.end('ok');
   });
+  // WebSocket echo so the message-metering test can drive frames through.
+  const originWss = new WebSocketServer({ server: origin });
+  originWss.on('connection', (ws) => ws.on('message', (m) => ws.send(String(m))));
   await new Promise<void>((r) => origin.listen(originPort, '127.0.0.1', r));
 
   worker = await unstable_dev('src/worker.ts', {
@@ -276,6 +282,32 @@ beforeAll(async () => {
   revService = rev.json.serviceToken as string;
   revApi = (await admin(port, 'POST', '/admin/accounts/rev/tokens', revService, { kind: 'api' })).json
     .token as string;
+
+  // wscap: small cap to prove relayed WS frames (messages) are metered + cut off.
+  const wscap = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
+    slug: 'wscap',
+    name: 'WsCap',
+    dayLimit: 60,
+    monthLimit: 100000,
+    leaseChunk: 16,
+    concurrentMax: 5,
+  });
+  wscapApi = (await admin(port, 'POST', '/admin/accounts/wscap/tokens', wscap.json.serviceToken as string, {
+    kind: 'api',
+  })).json.token as string;
+
+  // dollars: created via dollar amounts (created here, before the global-ceiling
+  // test consumes the remaining headroom). 1 op = $0.000001 → dayUsd 0.0005 = 500.
+  const dollars = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
+    slug: 'dollars',
+    name: 'Dollars',
+    dayUsd: 0.0005,
+    monthUsd: 0.0009,
+    leaseChunk: 1,
+    concurrentMax: 2,
+  });
+  dollarsService = dollars.json.serviceToken as string;
+  dollarsAccount = dollars.json.account as { dayLimit: number; monthLimit: number };
 }, 90000);
 
 afterAll(async () => {
@@ -320,19 +352,39 @@ describe('global ceiling invariant', () => {
   });
 
   test('cumulative allocation is enforced across accounts', async () => {
-    // allocated = acme5+cap1000+hdr50+push5+mon10+shared4+rev10 = 1084; global day = 2000.
+    // Compute remaining global headroom dynamically (robust to other accounts).
+    const list = await admin(port, 'GET', '/admin/accounts', ROOT_TOKEN);
+    const g = list.json.global as { day: number; allocated: { day: number } };
+    const room = g.day - g.allocated.day;
+    // An account that fits the remaining room is accepted...
     const beta = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
       slug: 'beta',
-      dayLimit: 900,
+      dayLimit: room - 10,
       monthLimit: 1,
     });
-    expect(beta.status).toBe(201); // 1084+900=1984 ≤ 2000
+    expect(beta.status).toBe(201);
+    // ...and the next one that would breach the global ceiling is rejected.
     const gamma = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
       slug: 'gamma',
-      dayLimit: 900,
+      dayLimit: 100,
       monthLimit: 1,
     });
-    expect(gamma.status).toBe(409); // 1984+900 = 2884 > 2000
+    expect(gamma.status).toBe(409);
+  });
+});
+
+describe('dollar-denominated limits', () => {
+  test('dollar amounts (dayUsd/monthUsd) convert to op-credits; usage reports usd', () => {
+    expect(dollarsAccount.dayLimit).toBe(500); // 0.0005 / 0.000001
+    expect(dollarsAccount.monthLimit).toBe(900); // 0.0009 / 0.000001
+  });
+
+  test('the usage view surfaces dollars', async () => {
+    const usage = await admin(port, 'GET', '/admin/accounts/dollars/usage', dollarsService);
+    const usd = usage.json.usd as { dayLimit: number; monthLimit: number };
+    expect(typeof usd.dayLimit).toBe('number');
+    expect(typeof usd.monthLimit).toBe('number');
+    expect((usage.json.day as { limit: number }).limit).toBe(500);
   });
 });
 
@@ -666,6 +718,55 @@ describe('token revocation', () => {
     expect(res.ok).toBe(false);
     expect(res.code).toBe(4003);
   }, 15000);
+});
+
+describe('relayed WS frames are metered (cap holds for chatty tunnels)', () => {
+  let tunnel: TunnelHandle;
+  beforeAll(async () => {
+    tunnel = await createTunnel({
+      port: originPort,
+      host: `http://127.0.0.1:${port}`,
+      tunnelId: 'wscap-t',
+      secret: wscapApi,
+      authRequired: false,
+      logger: NO_LOG,
+    });
+  }, 15000);
+  afterAll(() => {
+    try {
+      tunnel?.close();
+    } catch {
+      /* ignore */
+    }
+  });
+
+  test('a chatty WebSocket is cut off (1011) once the account budget is spent', async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/`, { headers: { Host: `wscap-t.${DOMAIN}` } });
+    let closeCode = 0;
+    const done = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 14000);
+      ws.on('close', (c) => {
+        closeCode = c;
+        clearTimeout(timer);
+        resolve();
+      });
+      ws.on('error', () => {});
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', resolve);
+      ws.on('error', reject);
+    });
+    // Each relayed frame (both directions) is a metered op; with a 60-op/day cap
+    // the relay must close the socket well before 200 frames.
+    let i = 0;
+    const pump = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN && i < 200) ws.send('x' + i++);
+      else clearInterval(pump);
+    }, 25);
+    await done;
+    clearInterval(pump);
+    expect(closeCode).toBe(1011); // closed by the relay on quota exhaustion
+  }, 20000);
 });
 
 describe('legacy shared secret still works (internal account)', () => {

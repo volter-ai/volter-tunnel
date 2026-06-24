@@ -61,6 +61,10 @@ interface PendingUpgrade {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/** Charge relayed messages (stream chunks / WS frames) in batches of this many,
+ *  keeping the per-frame path cheap. Caps unmetered overshoot at one batch. */
+const MSG_FLUSH_EVERY = 32;
+
 function b64encode(bytes: Uint8Array): string {
   let s = '';
   for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]!);
@@ -119,6 +123,9 @@ export class TunnelDO extends DurableObject<Env> {
   private rate: RateSnapshot | null = null;
   /** Last quota level pushed to the client — only re-push on change. */
   private lastQuotaLevel: string | null = null;
+  /** Relayed DO messages (response chunks + WS frames) not yet charged. Flushed
+   *  in batches so the per-frame path stays cheap; bounds unmetered overshoot. */
+  private msgsSinceFlush = 0;
 
   private accountStub(slug?: string): DurableObjectStub | null {
     const s = slug ?? this.ctlAttach()?.slug;
@@ -224,6 +231,26 @@ export class TunnelDO extends DurableObject<Env> {
     });
     this.budgetChain = run.catch(() => {});
     return run;
+  }
+
+  /** Charge the batch of relayed messages accrued since the last flush. On
+   *  exhaustion, cut the chatty traffic off by closing the browser sockets
+   *  (the control socket stays so the client can re-auth after the reset). */
+  private async flushMessages(): Promise<void> {
+    const n = this.msgsSinceFlush;
+    if (n <= 0) return;
+    this.msgsSinceFlush = 0;
+    const ok = await this.ensureBudget(n * CREDIT_WEIGHTS.message);
+    if (!ok) {
+      this.applyRate(this.rate ?? undefined); // ensure an 'exceeded' quota push
+      for (const b of this.ctx.getWebSockets('browser')) {
+        try {
+          (b as WebSocket).close(1011, 'Account quota exceeded');
+        } catch {
+          /* already gone */
+        }
+      }
+    }
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -407,6 +434,13 @@ export class TunnelDO extends DurableObject<Env> {
 
   // ── hibernation handlers ──────────────────────────────────────────────────
   async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer): Promise<void> {
+    // Every relayed message (response chunk / WS frame) is a billable op. Count
+    // it and charge in batches — fire-and-forget so the lease round-trip never
+    // blocks message relay (which would convoy under concurrency). The cap still
+    // holds: charging + cutoff happen a beat later, overshoot bounded by a batch.
+    this.msgsSinceFlush++;
+    if (this.msgsSinceFlush >= MSG_FLUSH_EVERY) void this.flushMessages().catch(() => {});
+
     const attach = ws.deserializeAttachment() as CtlAttach | BrowserAttach | null;
 
     // Raw browser frame → forward to control as ws-message.
@@ -447,6 +481,9 @@ export class TunnelDO extends DurableObject<Env> {
     // Settle metering: commit unflushed usage + tunnel-seconds and return any
     // unconsumed lease to the account (recovers budget stranded by hibernation).
     if (attach?.slug) {
+      // Fold any unflushed relayed-message ops into the final settlement.
+      this.consumedSinceCommit += this.msgsSinceFlush * CREDIT_WEIGHTS.message;
+      this.msgsSinceFlush = 0;
       const seconds = attach.openedAt ? Math.max(0, (Date.now() - attach.openedAt) / 1000) : 0;
       await this.accountRpc(
         '/close',
