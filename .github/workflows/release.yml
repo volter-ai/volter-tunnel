@@ -1,0 +1,41 @@
+name: Release
+
+# Publishes the three packages to npm on a version tag (e.g. v1.3.0).
+# Requires an NPM_TOKEN repo secret. Publish order matters: core → client → mcp.
+# `bun publish` rewrites the `workspace:*` dependency to the real version.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build
+      - name: Publish @volter/tunnel-core
+        run: cd packages/core && bun publish --access public
+        env:
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish @volter/tunnel
+        run: bun publish --access public
+        env:
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish @volter/tunnel-mcp
+        run: cd packages/mcp && bun publish --access public
+        env:
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}

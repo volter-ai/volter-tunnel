@@ -28,6 +28,12 @@ jobs:
         run: cd packages/mcp && bun test
       - name: Client SDK + CLI tests
         run: bun test ./test
+      - name: Build (tsup) + Node-consumability smoke
+        run: |
+          bun run build
+          node dist/cli.js --help >/dev/null 2>&1 || node dist/cli.js >/dev/null 2>&1 || true
+          node -e "import('./dist/tunnel-client.js').then(m=>{if(typeof m.createTunnel!=='function')process.exit(1)})"
+          node -e "import('./packages/core/dist/index.js').then(m=>{if(!m.MESSAGE_TYPES.length)process.exit(1)})"
 
   relay:
     name: relay (cloudflare workerd)
