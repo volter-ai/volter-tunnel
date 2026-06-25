@@ -1,16 +1,13 @@
 # Tunnel metering & accounts
 
-Status: **implemented + deployed + proven live.** Code in `server-cf/`. Automated
-tests in `server-cf/test/metering.test.ts` (real workerd, no mocks). Proven
-end-to-end over the internet against the deployed relay via
-`server-cf/proof-metering.ts` (account create → api token → real tunnel →
-exactly-N-then-429 cutoff with RateLimit-*/Retry-After headers → usage drained →
-legacy TUNNEL_SECRET back-compat). All green.
+How the relay meters tunnel traffic to a hard dollar ceiling, and how accounts
+and tokens work. Implemented in `server-cf/`, with automated tests in
+`server-cf/test/metering.test.ts` (real workerd, no mocks).
 
-The relay is fronted on Cloudflare's metered Durable Object product, so usage is
-our cost of goods. The metering system exists to make **runaway spend
-impossible**, while staying idiomatic to how ngrok / Cloudflare Tunnel structure
-accounts and credentials.
+The relay runs on Cloudflare's metered Durable Object product, so traffic is a
+real cost. The metering system exists to make **runaway spend impossible**, while
+staying idiomatic to how ngrok / Cloudflare Tunnel structure accounts and
+credentials.
 
 ## Model
 

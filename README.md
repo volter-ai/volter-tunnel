@@ -8,6 +8,8 @@ Cloudflare-Tunnel alternative whose headline feature is a **free, stable,
 reservable subdomain** that survives reconnects. Built on Cloudflare Workers +
 Durable Objects, so idle tunnels cost ~nothing.
 
+📖 **Documentation:** <https://volter-ai.github.io/volter-tunnel/>
+
 ```bash
 volter-tunnel login --host https://your-relay        # GitHub login, no OAuth app
 volter-tunnel --port 3000 --tunnel-id my-app         # → https://my-app.your-relay
@@ -17,7 +19,7 @@ volter-tunnel --port 3000 --tunnel-id my-app         # → https://my-app.your-r
 port over HTTP, streaming, and WebSocket; gate it with basic-auth/JWT; embed the
 tunneled app in an iframe (it strips `frame-ancestors`/X-Frame-Options — no other
 OSS tunnel does this); inspect every request live. See
-[docs/DECISIONS.md](./docs/DECISIONS.md) for the full rationale.
+[dev-docs/DECISIONS.md](./dev-docs/DECISIONS.md) for the full rationale.
 
 ## Install
 
@@ -102,7 +104,7 @@ volter-tunnel --port 3000 --host http://127.0.0.1:8787 --auth-not-required
 ```
 
 > Packages build to Node-consumable JS via `bun run build` and publish on a
-> version tag. See [docs/PUBLISHING.md](./docs/PUBLISHING.md).
+> version tag. See [dev-docs/PUBLISHING.md](./dev-docs/PUBLISHING.md).
 
 ## Develop
 
@@ -115,8 +117,9 @@ bun test ./test                                    # client SDK + CLI
 cd server-cf && npm install && npx vitest run      # relay (real workerd, no mocks)
 ```
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md). Deploy the relay with
-[docs/DEPLOY.md](./docs/DEPLOY.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md). Deploy your own relay with the
+[self-hosting guide](https://volter-ai.github.io/volter-tunnel/self-hosting/deploy)
+(source: [docs/self-hosting/deploy.md](./docs/self-hosting/deploy.md)).
 
 ## License
 

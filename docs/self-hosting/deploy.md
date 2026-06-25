@@ -1,8 +1,7 @@
-# @volter/tunnel — Production Deploy & Operations
+# Deploy a relay
 
-Runbook for launching the Cloudflare relay (`server-cf/`). Assumes the free-tier
-build (Phase 0 + 1 + #10) on `main`. See [DECISIONS.md](./DECISIONS.md) for the
-why and [ROADMAP.md](./ROADMAP.md) for status.
+Runbook for launching your own Cloudflare relay (`server-cf/`) on Cloudflare
+Workers + Durable Objects.
 
 ---
 
@@ -37,7 +36,7 @@ All commands run from `server-cf/`.
   if this is unset/empty, *nobody* can sign up unless `SIGNUP_OPEN=true` is also
   set. So the three modes are: allowlist (this set), fully open (`SIGNUP_OPEN=true`,
   no allowlist), or closed (neither — the safe default).
-  **LAUNCH POLICY (DECISIONS D6): WAITLIST ONLY.** SET on the live worker (seeded
+  **Recommended launch policy: WAITLIST ONLY.** Set on the worker (seeded
   with `<your-login>`) → signup is closed to the public; only listed logins can
   self-provision, everyone else gets 403. To approve someone off the waitlist,
   append their login and re-put:
@@ -107,7 +106,7 @@ curl -s $BASE/admin/usage    -H "Authorization: Bearer $ROOT_TOKEN"
 - **Rotate root**: `wrangler secret put ROOT_TOKEN` + redeploy (no lockout — the
   env secret is the source of truth).
 
-## 6. Decide before public launch (DECISIONS D6)
+## 6. Decide before public launch
 
 - Free-tier `SIGNUP_DAY/MONTH_LIMIT`, `DEFAULT_RESERVED_MAX`,
   `RESERVATION_IDLE_TTL_DAYS`, and whether `BURST_RPS` is on.

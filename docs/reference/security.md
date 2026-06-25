@@ -1,7 +1,9 @@
-# @volter/tunnel — Security Model & Review
+# Security model
 
-Security posture of the Cloudflare relay (`server-cf/`), the findings from the
-2026-06-24 review of the live deployment, and what was fixed vs. accepted.
+Security posture of the Cloudflare relay (`server-cf/`): the threat model, what
+is enforced, and which tradeoffs are accepted by default for a free, self-hostable
+tunnel. Published for transparency — if you self-host, the operator checklist at
+the end is the part to action.
 
 ---
 
@@ -14,7 +16,7 @@ Security posture of the Cloudflare relay (`server-cf/`), the findings from the
   $10,000/month**). Per-account `day/monthLimit` are sub-caps.
 - **Idle tunnels hibernate** → no duration billing when idle (the 25s client
   keepalive is a protocol ping, auto-answered without waking the DO — do **not**
-  change it to a message; see DECISIONS D2).
+  change it to an application message — this is deliberate).
 - **The signup allowlist bounds accounts** → bounds reserved-id and per-account
   storage growth.
 
@@ -54,7 +56,7 @@ unauthenticated control plane are **not** metered — see fix #1.
 
 4. **The gh token transits the relay** (token method): verified to be
    used-once-and-discarded (never stored/logged). The **gist method sends us no
-   token** for the security-conscious. Documented tradeoff (DECISIONS D4).
+   token** for the security-conscious. A documented tradeoff.
 
 5. **`/__internal/revoke-reservation`** is reachable on any tunnel path but
    **root-token gated** (constant-time). Large blast radius if `ROOT_TOKEN` leaks

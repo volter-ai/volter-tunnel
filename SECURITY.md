@@ -10,7 +10,7 @@ business days.
 ## Scope notes
 
 - The relay's threat model and hardening notes live in
-  [docs/SECURITY.md](docs/SECURITY.md).
+  [docs/reference/security.md](docs/reference/security.md).
 - `JWT_SECRET` is intentionally optional; with it unset, tunnels are publicly
   shareable and the inspector is independently owner-gated.
 - GitHub tokens used for signup are verified once and discarded — never stored.

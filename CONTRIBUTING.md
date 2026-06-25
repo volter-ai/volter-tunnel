@@ -47,5 +47,5 @@ CI (`.github/workflows/ci.yml`) runs all of the above on every PR.
 
 ## Reporting security issues
 
-See [docs/SECURITY.md](docs/SECURITY.md). Please do not open public issues for
+See [SECURITY.md](SECURITY.md). Please do not open public issues for
 vulnerabilities.

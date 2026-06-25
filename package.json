@@ -60,7 +60,10 @@
     "test:all": "bun run test && bun run test:cf",
     "lint": "biome check client packages server-cf/src examples",
     "format": "biome format --write client packages server-cf/src examples",
-    "tunnel": "bun run client/tunnel-client.ts"
+    "tunnel": "bun run client/tunnel-client.ts",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "dependencies": {
     "@volter/tunnel-core": "workspace:*",
@@ -73,7 +76,8 @@
     "@types/ws": "^8.5.14",
     "jsonwebtoken": "^9.0.2",
     "tsup": "^8.5.1",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitepress": "^1.6.3"
   },
   "optionalDependencies": {
     "qrcode-terminal": "^0.12.0"
