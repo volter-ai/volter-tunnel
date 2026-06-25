@@ -1,0 +1,20 @@
+{
+  "name": "@volter/tunnel-mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing volter-tunnel account/usage/abuse operations as tools for AI agents.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "volter-tunnel-mcp": "./src/server.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  },
+  "scripts": {
+    "test": "bun test"
+  }
+}
