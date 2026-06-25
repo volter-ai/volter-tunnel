@@ -1,9 +1,7 @@
 # volter-tunnel
 
+[![CI](https://github.com/yueranyuan/volter-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/yueranyuan/volter-tunnel/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
-
-<!-- Add the CI badge once a GitHub remote exists:
-[![CI](https://github.com/<org>/<repo>/actions/workflows/ci.yml/badge.svg)](https://github.com/<org>/<repo>/actions/workflows/ci.yml) -->
 
 An open-source, WebSocket-based **HTTP/WS reverse tunnel** — an ngrok /
 Cloudflare-Tunnel alternative whose headline feature is a **free, stable,
