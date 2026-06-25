@@ -1,6 +1,6 @@
 {
   "name": "@volter/tunnel",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "WebSocket HTTP/WS reverse tunnel client — embeddable library (createTunnel) + CLI + a typed relay SDK (VolterClient).",
   "repository": {
     "type": "git",
@@ -52,8 +52,8 @@
   ],
   "publishConfig": { "access": "public" },
   "scripts": {
-    "build": "bun run --filter '@volter/tunnel-core' build && tsup client/tunnel-client.ts client/cli.ts --format esm --clean --out-dir dist && bun run --filter '@volter/tunnel-mcp' build",
-    "prepublishOnly": "tsup client/tunnel-client.ts client/cli.ts --format esm --clean --out-dir dist",
+    "build": "bun run --filter '@volter/tunnel-core' build && bunx tsup client/tunnel-client.ts client/cli.ts --format esm --clean --out-dir dist && bun run --filter '@volter/tunnel-mcp' build",
+    "prepublishOnly": "bunx tsup client/tunnel-client.ts client/cli.ts --format esm --clean --out-dir dist",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p packages/core/tsconfig.json && tsc --noEmit -p packages/mcp/tsconfig.json",
     "test": "bun test ./test && (cd packages/core && bun test) && (cd packages/mcp && bun test)",
     "test:cf": "cd server-cf && vitest run",

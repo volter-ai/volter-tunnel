@@ -1,11 +1,18 @@
 # Changelog
 
 All notable changes to this project are documented here. The format is based on
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). All three publishable
-packages (`@volter/tunnel`, `@volter/tunnel-core`, `@volter/tunnel-mcp`) version
-in lockstep.
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Packages version
+independently: `@volter/tunnel` continues its line (→ **2.0.0**), while
+`@volter/tunnel-core` and `@volter/tunnel-mcp` are new at **0.1.0**.
 
-## [Unreleased] — 0.1.0 (first public release, not yet tagged)
+## @volter/tunnel 2.0.0 — @volter/tunnel-core 0.1.0 — @volter/tunnel-mcp 0.1.0
+
+### Breaking (@volter/tunnel)
+
+- Removed the `./server` subpath export (the legacy Fly relay) and the
+  `jsonwebtoken` peer dependency. The client (`createTunnel`) API is unchanged.
+- Now ships built JS in `dist/` for Node consumers (Bun still resolves source);
+  the package depends on `@volter/tunnel-core`.
 
 ### Added
 
