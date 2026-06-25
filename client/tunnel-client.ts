@@ -4,7 +4,7 @@
  * reconnect/backoff) and delegates request/WS forwarding to ./transport. The CLI
  * bin is ./cli.ts; the wire protocol is @volter/tunnel-core.
  */
-import http from 'node:http';
+import type http from 'node:http';
 import WebSocket from 'ws';
 import type { CorrelationId, RelayToClient } from '@volter/tunnel-core';
 import { forwardRequest, handleWsUpgrade, http1Agent, resolveLocalHost, safeClose } from './transport';
@@ -43,9 +43,7 @@ export function createTunnel({
   // upgrade time, before the `register` message is sent. The Fly relay ignores
   // the query param and reads tunnelId from `register`, so one client works
   // against both servers.
-  const wsUrl =
-    `${host.replace(/^http/, 'ws')}/ws` +
-    (tunnelId ? `?id=${encodeURIComponent(tunnelId)}` : '');
+  const wsUrl = `${host.replace(/^http/, 'ws')}/ws` + (tunnelId ? `?id=${encodeURIComponent(tunnelId)}` : '');
 
   // Resolved loopback address for this port (set before first connection)
   let localHost = '127.0.0.1';
@@ -58,10 +56,7 @@ export function createTunnel({
   // fail (close without receiving 'registered') will still retry instead of giving up.
   let everRegistered = false;
 
-  function connect(
-    onRegistered: (handle: TunnelHandle) => void,
-    onFirstError: ((err: Error) => void) | null
-  ): void {
+  function connect(onRegistered: (handle: TunnelHandle) => void, onFirstError: ((err: Error) => void) | null): void {
     if (closed) return;
 
     const ws = new WebSocket(wsUrl, wsUrl.startsWith('wss:') ? { agent: http1Agent } : {});
@@ -262,11 +257,7 @@ export function createTunnel({
         const localWs = localWsConnections.get(msg.connId);
         if (localWs) {
           const code =
-            msg.code &&
-            msg.code >= 1000 &&
-            msg.code <= 4999 &&
-            msg.code !== 1005 &&
-            msg.code !== 1006
+            msg.code && msg.code >= 1000 && msg.code <= 4999 && msg.code !== 1005 && msg.code !== 1006
               ? msg.code
               : 1000;
           safeClose(localWs, code, msg.reason || '');
