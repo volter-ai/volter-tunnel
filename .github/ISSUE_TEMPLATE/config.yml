@@ -1,3 +1,5 @@
 blank_issues_enabled: false
-# Security issues must NOT be filed as public issues — see SECURITY.md
-# (report privately to security@volter.ai).
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/yueranyuan/volter-tunnel/security/advisories/new
+    about: Report security issues privately (see SECURITY.md) — never as a public issue.
