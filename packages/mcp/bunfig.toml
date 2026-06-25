@@ -1,0 +1,5 @@
+# The tool layer (tools.ts) is held to 100% coverage; server.ts is thin stdio
+# wiring exercised by the boot smoke test, not unit tests.
+[test]
+coverage = true
+coverageThreshold = 1.0
