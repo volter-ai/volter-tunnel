@@ -8,10 +8,12 @@ name: Deploy relay
 #
 # Secrets (stored as Actions secrets, NEVER committed — making the repo public
 # does not expose them):
-#   CLOUDFLARE_API_TOKEN  — scope: Account → Workers Scripts: Edit (least privilege)
+#   CLOUDFLARE_API_TOKEN  — Edit-Workers token scoped to this account + zone
 #   CLOUDFLARE_ACCOUNT_ID — the target account id
 #
-# The relay test suite (real workerd) runs first, so a deploy can't ship red.
+# Setup mirrors ci.yml's relay job: the root install provides jsonwebtoken (a
+# root devDep the CF tests import), then the relay's own deps, then the real
+# workerd suite runs before wrangler deploy — so a deploy can't ship red.
 
 on:
   push:
@@ -25,19 +27,22 @@ jobs:
     environment: production
     permissions:
       contents: read
-    defaults:
-      run:
-        working-directory: server-cf
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - run: bun install --frozen-lockfile
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install root deps (provides jsonwebtoken for the CF tests)
+        run: bun install --frozen-lockfile
+      - name: Install relay deps
+        run: cd server-cf && bun install --frozen-lockfile
       - name: Test (real workerd)
-        run: bun run test
+        run: cd server-cf && bunx vitest run
       - name: Deploy
-        run: bunx wrangler deploy
+        run: cd server-cf && bunx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
