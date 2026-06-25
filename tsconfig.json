@@ -1,18 +1,7 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "lib": ["ES2022"],
-    "types": ["node", "ws"],
-    "strict": true,
-    "noEmit": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true
+    "types": ["node", "ws"]
   },
-  "include": ["client/**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": ["client/**/*.ts"]
 }
