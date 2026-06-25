@@ -220,9 +220,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       month: { pct: number };
     }
     const slugs = [...this.accounts.keys()];
-    const usages = (await Promise.all(
-      slugs.map((slug) => this.accountUsage(slug).catch(() => null))
-    )) as (U | null)[];
+    const usages = (await Promise.all(slugs.map((slug) => this.accountUsage(slug).catch(() => null)))) as (U | null)[];
     const accounts = usages.filter((u): u is U => !!u);
     const totals = accounts.reduce(
       (t, a) => ({
@@ -262,9 +260,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     // Cost-DoS guard: rate-limit the unauthenticated public surface (signup +
     // report) — they are not metered by the credit ceiling.
     if (
-      (url.pathname.startsWith('/signup/') ||
-        url.pathname === '/report' ||
-        url.pathname === '/waitlist') &&
+      (url.pathname.startsWith('/signup/') || url.pathname === '/report' || url.pathname === '/waitlist') &&
       this.publicRateLimited()
     ) {
       return json({ error: 'rate limited' }, 429);
@@ -581,8 +577,12 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     if (this.signupAllowed(githubUser)) {
       return json({ ok: true, alreadyAllowed: true, message: 'already approved — you can sign up now' });
     }
-    const email = String(body.email ?? '').trim().slice(0, 200);
-    const useCase = String(body.useCase ?? '').trim().slice(0, 500);
+    const email = String(body.email ?? '')
+      .trim()
+      .slice(0, 200);
+    const useCase = String(body.useCase ?? '')
+      .trim()
+      .slice(0, 500);
     const lower = githubUser.toLowerCase();
     this.waitlist = this.waitlist.filter((w) => w.githubUser.toLowerCase() !== lower);
     this.waitlist.push({ githubUser, email, useCase, at: new Date().toISOString() });
@@ -644,9 +644,9 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
 
     // Accept limits as dollars (dayUsd/monthUsd) or raw op-credits (dayLimit/…).
     const dayLimit = body.dayUsd !== undefined ? usdToCredits(Number(body.dayUsd)) : Number(body.dayLimit ?? 0);
-    const monthLimit =
-      body.monthUsd !== undefined ? usdToCredits(Number(body.monthUsd)) : Number(body.monthLimit ?? 0);
-    if (!(dayLimit > 0) || !(monthLimit > 0)) return json({ error: 'dayLimit/dayUsd and monthLimit/monthUsd required' }, 400);
+    const monthLimit = body.monthUsd !== undefined ? usdToCredits(Number(body.monthUsd)) : Number(body.monthLimit ?? 0);
+    if (!(dayLimit > 0) || !(monthLimit > 0))
+      return json({ error: 'dayLimit/dayUsd and monthLimit/monthUsd required' }, 400);
     if (!this.fitsGlobal(slug, dayLimit, monthLimit)) {
       return json({ error: 'exceeds global ceiling — raise GLOBAL_*_LIMIT or lower this account' }, 409);
     }
@@ -700,7 +700,8 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     if (auth?.kind === 'service' && auth.slug !== slug) return json({ error: 'forbidden' }, 403);
     const kind = body.kind === 'service' ? 'service' : 'api';
     // Only root may mint additional service tokens (privilege escalation guard).
-    if (kind === 'service' && auth?.kind !== 'root') return json({ error: 'root token required to mint service tokens' }, 403);
+    if (kind === 'service' && auth?.kind !== 'root')
+      return json({ error: 'root token required to mint service tokens' }, 403);
     const minted = await this.mint(slug, kind, String(body.label ?? `${kind} token`));
     if (kind === 'api') await this.pushConfig(slug);
     const rec = this.tokens.get(minted.id)!;
@@ -711,7 +712,14 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     if (auth?.kind === 'service' && auth.slug !== slug) return json({ error: 'forbidden' }, 403);
     const out = [...this.tokens.values()]
       .filter((r) => r.slug === slug)
-      .map((r) => ({ id: r.id, kind: r.kind, last4: r.last4, label: r.label, createdAt: r.createdAt, revokedAt: r.revokedAt }));
+      .map((r) => ({
+        id: r.id,
+        kind: r.kind,
+        last4: r.last4,
+        label: r.label,
+        createdAt: r.createdAt,
+        revokedAt: r.revokedAt,
+      }));
     return json({ tokens: out });
   }
 

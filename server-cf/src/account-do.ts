@@ -85,10 +85,7 @@ export class AccountDO extends DurableObject<MeteringEnv> {
       const stored = (await ctx.storage.get<Record<string, OpenEntry | number>>('open')) ?? {};
       // Tolerate the legacy shape (tunnelId → number) from before the ledger entry.
       this.open = new Map(
-        Object.entries(stored).map(([k, v]) => [
-          k,
-          typeof v === 'number' ? { lease: v, regId: '', seen: 0 } : v,
-        ])
+        Object.entries(stored).map(([k, v]) => [k, typeof v === 'number' ? { lease: v, regId: '', seen: 0 } : v])
       );
       this.reserved = new Set((await ctx.storage.get<string[]>('reserved')) ?? []);
     });
@@ -151,12 +148,8 @@ export class AccountDO extends DurableObject<MeteringEnv> {
    *  data plane (RateLimit headers) and control plane (registered + quota push). */
   private snapshot(): RateSnapshot {
     const now = new Date();
-    const dayReset = Math.floor(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1) / 1000
-    );
-    const monthReset = Math.floor(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1) / 1000
-    );
+    const dayReset = Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1) / 1000);
+    const monthReset = Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1) / 1000);
     const dayLimit = this.config?.dayLimit ?? 0;
     const monthLimit = this.config?.monthLimit ?? 0;
     const dayRem = Math.max(0, this.dayRemaining());
@@ -164,8 +157,7 @@ export class AccountDO extends DurableObject<MeteringEnv> {
     const dayPct = dayLimit ? (dayLimit - dayRem) / dayLimit : 0;
     const monthPct = monthLimit ? (monthLimit - monthRem) / monthLimit : 0;
     const pct = Math.max(dayPct, monthPct);
-    const level: RateSnapshot['level'] =
-      dayRem <= 0 || monthRem <= 0 ? 'exceeded' : pct >= 0.8 ? 'warn' : 'ok';
+    const level: RateSnapshot['level'] = dayRem <= 0 || monthRem <= 0 ? 'exceeded' : pct >= 0.8 ? 'warn' : 'ok';
     return {
       day: { limit: dayLimit, remaining: dayRem, reset: dayReset },
       month: { limit: monthLimit, remaining: monthRem, reset: monthReset },
@@ -194,11 +186,7 @@ export class AccountDO extends DurableObject<MeteringEnv> {
       this.env.USAGE_AE.writeDataPoint({
         indexes: [this.config.slug],
         blobs: [this.config.slug, this.config.status, this.usage.day],
-        doubles: [
-          this.usage.dayUsed + this.usage.leased,
-          this.usage.monthUsed + this.usage.leased,
-          this.open.size,
-        ],
+        doubles: [this.usage.dayUsed + this.usage.leased, this.usage.monthUsed + this.usage.leased, this.open.size],
       });
     } catch {
       /* best-effort */
@@ -252,10 +240,7 @@ export class AccountDO extends DurableObject<MeteringEnv> {
   async fetch(request: Request): Promise<Response> {
     await this.loaded;
     const url = new URL(request.url);
-    const body =
-      request.method === 'POST'
-        ? ((await request.json().catch(() => ({}))) as Record<string, unknown>)
-        : {};
+    const body = request.method === 'POST' ? ((await request.json().catch(() => ({}))) as Record<string, unknown>) : {};
 
     switch (url.pathname) {
       case '/authorize':

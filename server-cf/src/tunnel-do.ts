@@ -209,7 +209,7 @@ export class TunnelDO extends DurableObject<Env> {
     bodyBytes: Uint8Array | null
   ): Promise<void> {
     const maxBody = envNum(this.env.INSPECT_BODY_MAX, 65536);
-    const body = bodyBytes && bodyBytes.length && bodyBytes.length <= maxBody ? b64encode(bodyBytes) : null;
+    const body = bodyBytes?.length && bodyBytes.length <= maxBody ? b64encode(bodyBytes) : null;
     this.captures.set(id, { method, path, headers, body, at: Date.now() });
     const cap = envNum(this.env.INSPECT_MAX, INSPECT_CAP);
     while (this.captures.size > cap) {
@@ -245,11 +245,7 @@ export class TunnelDO extends DurableObject<Env> {
 
   /** RPC to the account DO. `slug` is required at register (before the slug is in
    *  the attachment); afterwards it's read from the attachment. */
-  private async accountRpc<T>(
-    path: string,
-    payload: Record<string, unknown>,
-    slug?: string
-  ): Promise<T | null> {
+  private async accountRpc<T>(path: string, payload: Record<string, unknown>, slug?: string): Promise<T | null> {
     const stub = this.accountStub(slug ?? (payload.slug as string | undefined));
     if (!stub) return null;
     try {
@@ -550,10 +546,7 @@ export class TunnelDO extends DurableObject<Env> {
         requireTid: this.env.REQUIRE_TID === 'true',
       });
       if (!auth) {
-        return Response.json(
-          { error: 'Authentication required' },
-          { status: 401, headers: corsHeaders(request) }
-        );
+        return Response.json({ error: 'Authentication required' }, { status: 401, headers: corsHeaders(request) });
       }
       if (auth.source === 'query') {
         // Scope the cookie to THIS tunnel so a token bootstrapped on one tunnel's
@@ -652,7 +645,7 @@ export class TunnelDO extends DurableObject<Env> {
           method: request.method,
           path: forwardPath,
           headers: forwardHeaders,
-          body: bodyBytes && bodyBytes.length ? b64encode(bodyBytes) : null,
+          body: bodyBytes?.length ? b64encode(bodyBytes) : null,
         });
       } catch {
         clearTimeout(timer);
@@ -739,9 +732,7 @@ export class TunnelDO extends DurableObject<Env> {
         return;
       }
       const binary = typeof data !== 'string';
-      const bytes = binary
-        ? new Uint8Array(data as ArrayBuffer)
-        : new TextEncoder().encode(data as string);
+      const bytes = binary ? new Uint8Array(data as ArrayBuffer) : new TextEncoder().encode(data as string);
       // A DO WS frame is capped at 1 MiB and base64 inflates ~33%; an oversized
       // browser frame would throw on ctl.send and escape the hibernation handler.
       if (bytes.length > 750_000) {
@@ -955,8 +946,7 @@ export class TunnelDO extends DurableObject<Env> {
       // Prefer the ?id= captured at accept (authoritative — it's how the Worker
       // routed to this DO); fall back to msg.tunnelId, then a random id.
       const existing = ws.deserializeAttachment() as CtlAttach | null;
-      const tunnelId =
-        existing?.tunnelId || (msg.tunnelId as string) || crypto.randomUUID().slice(0, 8);
+      const tunnelId = existing?.tunnelId || (msg.tunnelId as string) || crypto.randomUUID().slice(0, 8);
 
       // Unique registration nonce — lets the account tell this socket's ledger
       // entry apart from a later replacement's (fixes the replace race).
@@ -996,8 +986,7 @@ export class TunnelDO extends DurableObject<Env> {
 
       const authRequired = msg.authRequired !== false;
       const ba = msg.basicAuth as { user?: string; pass?: string } | undefined;
-      const basicAuthHash =
-        ba && ba.user && ba.pass ? await hashToken(`${ba.user}:${ba.pass}`) : undefined;
+      const basicAuthHash = ba?.user && ba.pass ? await hashToken(`${ba.user}:${ba.pass}`) : undefined;
       ws.serializeAttachment({
         role: 'ctl',
         registered: true,
