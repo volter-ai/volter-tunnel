@@ -19,12 +19,6 @@
       "optionalDependencies": {
         "qrcode-terminal": "^0.12.0",
       },
-      "peerDependencies": {
-        "jsonwebtoken": "^9.0.0",
-      },
-      "optionalPeers": [
-        "jsonwebtoken",
-      ],
     },
     "packages/core": {
       "name": "@volter/tunnel-core",

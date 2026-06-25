@@ -61,9 +61,9 @@ Verified in `server-cf/src/tunnel-do.ts`:
   auto-responds with pong **without waking the DO and without billing**
   (confirmed against Cloudflare's WebSocket Hibernation docs).
 
-> ⚠️ **Landmine — do not "fix" this:** the 25s ping exists for Fly.io's 30s idle
-> timeout (the `server/` path) and is harmless on CF *because it is a protocol
-> ping*. If anyone converts the keepalive to an application-level "ping"
+> ⚠️ **Landmine — do not "fix" this:** the 25s ping originated for a long-running
+> relay's idle timeout (e.g. Fly.io's 30s) and is harmless on CF *because it is a
+> protocol ping*. If anyone converts the keepalive to an application-level "ping"
 > **message**, it will wake the DO every 25s (~3,400×/day per idle tunnel) and
 > bill duration — silently destroying "idle = free." Keep it a protocol ping,
 > or use `setWebSocketAutoResponse`.

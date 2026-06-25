@@ -87,7 +87,6 @@ client/          @volter/tunnel — core ← transport ← sdk (createTunnel +
 packages/mcp/    @volter/tunnel-mcp — MCP server over the SDK.
 server-cf/       Cloudflare Worker + Durable Objects relay (primary). One DO per
                  tunnelId holds the hibernatable control socket → idle = free.
-server/          a legacy single-process Fly relay (same wire protocol).
 ```
 
 The protocol lives in `core` and nowhere else, so the client and relay can't

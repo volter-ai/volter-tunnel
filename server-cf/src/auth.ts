@@ -1,8 +1,7 @@
 /**
  * Auth + header helpers for the Cloudflare tunnel relay.
  *
- * Ports server/server.mjs's JWT/cookie/CORS/CSP logic to the Fetch API and
- * `jose` (WebCrypto-based; `jsonwebtoken` does not run on Workers).
+ * Implements the JWT/cookie/CORS/CSP logic on the Fetch API + `jose` (WebCrypto-based; `jsonwebtoken` does not run on Workers).
  */
 import { type JWTPayload, jwtVerify } from 'jose';
 import type { MeteringEnv } from './metering-types';
@@ -231,7 +230,7 @@ export function parseHeaderRules(raw: string | undefined): HeaderRules {
  * Build the downstream response headers: drop hop-by-hop + downstream CORS,
  * strip CSP frame-ancestors / X-Frame-Options (the built-in iframe embedding —
  * always on), apply any operator-configured `rules`, then re-apply our CORS +
- * cookie. Mirrors server/server.mjs response handling.
+ * cookie.
  */
 export function buildResponseHeaders(
   downstream: Record<string, string>,

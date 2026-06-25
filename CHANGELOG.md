@@ -18,6 +18,13 @@ All notable changes to this project are documented here. The format is based on
 - Monorepo tooling: bun workspaces, Biome lint/format, GitHub Actions CI, Apache
   LICENSE + NOTICE, CONTRIBUTING + CODE_OF_CONDUCT, issue/PR templates, examples.
 
+### Removed
+
+- The legacy single-process **Fly relay** (`server/`) and its e2e test. The
+  Cloudflare Workers + Durable Objects relay (`server-cf/`) is the one relay; the
+  client is e2e-tested against real `workerd`. Dropped the `./server` export and
+  the misleading `jsonwebtoken` peer dependency (kept as a devDep for CF tests).
+
 ### Changed
 
 - Client refactored into layers: **core → transport → sdk → cli**.

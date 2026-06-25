@@ -1,7 +1,10 @@
 {
   "name": "@volter/tunnel",
   "version": "1.2.0",
-  "description": "Volter tunnel — WebSocket-based HTTP/WS reverse tunnel: a relay server plus a client connector library and CLI.",
+  "description": "WebSocket HTTP/WS reverse tunnel client — embeddable library (createTunnel) + CLI + a typed relay SDK (VolterClient).",
+  "repository": { "type": "git", "url": "git+https://github.com/yueranyuan/volter-tunnel.git" },
+  "homepage": "https://github.com/yueranyuan/volter-tunnel#readme",
+  "bugs": { "url": "https://github.com/yueranyuan/volter-tunnel/issues" },
   "type": "module",
   "license": "Apache-2.0",
   "keywords": [
@@ -27,12 +30,10 @@
   "types": "./client/tunnel-client.ts",
   "exports": {
     ".": "./client/tunnel-client.ts",
-    "./client": "./client/tunnel-client.ts",
-    "./server": "./server/server.mjs"
+    "./client": "./client/tunnel-client.ts"
   },
   "files": [
     "client",
-    "server",
     "README.md"
   ],
   "scripts": {
@@ -42,20 +43,11 @@
     "test:all": "bun run test && bun run test:cf",
     "lint": "biome check client packages server-cf/src examples",
     "format": "biome format --write client packages server-cf/src examples",
-    "tunnel": "bun run client/tunnel-client.ts",
-    "server": "node server/server.mjs"
+    "tunnel": "bun run client/tunnel-client.ts"
   },
   "dependencies": {
     "@volter/tunnel-core": "workspace:*",
     "ws": "^8.18.0"
-  },
-  "peerDependencies": {
-    "jsonwebtoken": "^9.0.0"
-  },
-  "peerDependenciesMeta": {
-    "jsonwebtoken": {
-      "optional": true
-    }
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
