@@ -75,8 +75,9 @@
 
     // Optional (unset = off):
     //   SIGNUP_ALLOWED_USERS — allowlist mode (comma-separated GitHub logins).
-    //     UNSET/EMPTY = OPEN signup. Set via `wrangler secret put` so it isn't
-    //     committed (logins aren't secret, but keep them out of a public repo).
+    //     Signup FAILS CLOSED when unset/empty; set SIGNUP_OPEN=true to allow
+    //     everyone. Set via `wrangler secret put` (keep logins out of the repo).
+    //   SIGNUP_OPEN=true     — open signup to everyone (only when no allowlist).
     //   INSPECT_REPLAY=true  — persisted inspector history + /__volter_replay.
     //   GITHUB_API_BASE      — override the GitHub API (default api.github.com).
   },

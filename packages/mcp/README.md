@@ -1,7 +1,7 @@
 # @volter/tunnel-mcp
 
 An [MCP](https://modelcontextprotocol.io) server that exposes
-[volter-tunnel](../../README.md) account/usage/abuse operations as tools, so AI
+volter-tunnel account/usage/abuse operations as tools, so AI
 agents can manage a relay over the same SDK the CLI uses.
 
 ## Run
@@ -39,4 +39,4 @@ Example client config (Claude Desktop / any MCP host):
 The tool layer (`src/tools.ts`) is transport-agnostic and held to **100%
 coverage**; `src/server.ts` is the thin stdio wiring.
 
-Licensed [Apache-2.0](../../LICENSE).
+Licensed under Apache-2.0.

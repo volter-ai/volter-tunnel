@@ -13,8 +13,9 @@ import type { TunnelHandle, TunnelLogger, TunnelOptions } from './types';
 export type { TunnelHandle, TunnelLogger, TunnelOptions } from './types';
 export { VolterApiError, VolterClient, type AccountUsage, type Me, type VolterClientOptions } from './api';
 
-/** Default relay (Cloudflare Workers + Durable Objects). */
-export const DEFAULT_HOST = 'https://volter-tunnel.aaron-0ed.workers.dev';
+/** Default relay (the public demo deployment). Override with --host / the `host`
+ *  option to point at your own relay. */
+export const DEFAULT_HOST = 'https://voltertest.xyz';
 
 const defaultLogger: TunnelLogger = {
   info(obj, msg) {

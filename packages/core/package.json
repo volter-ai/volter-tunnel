@@ -4,6 +4,8 @@
   "description": "Shared wire-protocol contract for volter-tunnel: control-message types, frame codec, and DTOs. Pure, dependency-free, runtime-agnostic.",
   "type": "module",
   "license": "Apache-2.0",
+  "keywords": ["volter-tunnel", "wire-protocol", "tunnel"],
+  "engines": { "bun": ">=1.0.0" },
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

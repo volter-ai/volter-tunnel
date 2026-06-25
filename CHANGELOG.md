@@ -24,11 +24,27 @@ All notable changes to this project are documented here. The format is based on
 - Relay emits every control frame through a typed `sendFrame` bound to the shared
   contract (was untyped object literals).
 
+### Security
+
+- Signup **fails closed**: an unset/empty `SIGNUP_ALLOWED_USERS` no longer means
+  open signup — open mode requires an explicit `SIGNUP_OPEN=true`.
+- `GET /me` rejects tokens of **suspended** accounts.
+- Removed the hardcoded gist-nonce HMAC fallback (`'volter-signup'`); the gist
+  endpoints fail closed when no signup secret is configured.
+
 ### Fixed
 
 - `reqId`/`connId` were typed `number` but the Cloudflare relay emits UUID
   **strings**; corrected to a `CorrelationId = string | number` union across the
   protocol, client, and tests.
+- Deduplicated DTOs into `@volter/tunnel-core`: removed a dead/divergent
+  `Reservation` type and unified the `AccountUsage`/usage-window shape (was
+  triplicated across client + relay).
+- Default relay host is now the public demo (`voltertest.xyz`) instead of a
+  personal `workers.dev` URL.
+- CI relay job uses a frozen `bun install` (was unpinned `npm install`); removed
+  the broken CI badge / fabricated repo references; corrected stale test counts
+  and the internal-vs-free limit docs.
 
 ### License
 
