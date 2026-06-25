@@ -30,6 +30,7 @@
     "server": "node server/server.mjs"
   },
   "dependencies": {
+    "@volter/tunnel-core": "workspace:*",
     "ws": "^8.18.0"
   },
   "peerDependencies": {
