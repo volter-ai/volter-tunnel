@@ -1,8 +1,16 @@
 name: Release
 
 # Publishes the three packages to npm on a version tag (e.g. v2.0.0).
-# Requires an NPM_TOKEN repo secret. Publish order matters: core → client → mcp.
-# `bun publish` rewrites the `workspace:*` dependency to the real version.
+#
+# Auth is npm OIDC "trusted publishing" — there is NO stored NPM_TOKEN. Each
+# package must list this repo + this workflow as a Trusted Publisher on
+# npmjs.com (Package settings → Trusted Publisher). npm mints a short-lived
+# credential per run via the `id-token` and attaches build provenance.
+#
+# Publish order matters: core → client → mcp. The root `@volter/tunnel` depends
+# on `@volter/tunnel-core` via `workspace:*`; npm (unlike bun) does NOT translate
+# that protocol on publish, so we rewrite it to the real version just-in-time
+# with `npm pkg set` before publishing. The repo keeps `workspace:*` for local dev.
 
 on:
   push:
@@ -14,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
+      id-token: write # required for npm OIDC trusted publishing + provenance
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -23,19 +31,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
+      - name: Upgrade npm (OIDC trusted publishing needs >= 11.5.1)
+        run: npm install -g npm@latest
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run build
       - name: Publish @volter/tunnel-core
-        run: cd packages/core && bun publish --access public
-        env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+        working-directory: packages/core
       - name: Publish @volter/tunnel
-        run: bun publish --access public
-        env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm pkg set "dependencies.@volter/tunnel-core=$(node -p "require('./packages/core/package.json').version")"
+          npm publish --access public
       - name: Publish @volter/tunnel-mcp
-        run: cd packages/mcp && bun publish --access public
-        env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+        working-directory: packages/mcp
