@@ -59,11 +59,24 @@ function startStub(port: number): Promise<void> {
   return new Promise((r) => stub.listen(port, '127.0.0.1', () => r()));
 }
 
-function post(port: number, path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
+const ROOT = 'vtr_TESTROOT0000000000000000000000000000000';
+
+function post(
+  port: number,
+  path: string,
+  body: unknown,
+  extraHeaders: Record<string, string> = {}
+): Promise<{ status: number; json: Record<string, unknown> }> {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
     const req = http.request(
-      { host: '127.0.0.1', port, path, method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } },
+      {
+        host: '127.0.0.1',
+        port,
+        path,
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), ...extraHeaders },
+      },
       (res) => {
         let b = '';
         res.on('data', (c) => (b += c));
@@ -181,6 +194,27 @@ describe('self-service /me (api token reads its own account + usage)', () => {
     const res = await get(port, '/me', { authorization: 'Bearer vta_not_a_real_token' });
     expect(res.status).toBe(401);
   });
+
+  test('GET /me is 403 while the account is suspended', async () => {
+    const signup = await post(port, '/signup/github', { token: 'good-token' });
+    const apiToken = signup.json.token as string;
+    const root = { authorization: `Bearer ${ROOT}` };
+    // suspend → 403, then resume → 200 (leave the account active for later tests)
+    await post(port, '/admin/accounts/gh-4242/suspend', {}, root);
+    const suspended = await get(port, '/me', { authorization: `Bearer ${apiToken}` });
+    expect(suspended.status).toBe(403);
+    await post(port, '/admin/accounts/gh-4242/resume', {}, root);
+    const resumed = await get(port, '/me', { authorization: `Bearer ${apiToken}` });
+    expect(resumed.status).toBe(200);
+  }, 20000);
+
+  test('GET /me with a revoked token is 401 (logging in again rotates the prior token)', async () => {
+    const first = await post(port, '/signup/github', { token: 'good-token' });
+    const oldToken = first.json.token as string;
+    await post(port, '/signup/github', { token: 'good-token' }); // rotates oldToken
+    const res = await get(port, '/me', { authorization: `Bearer ${oldToken}` });
+    expect(res.status).toBe(401);
+  }, 20000);
 });
 
 describe('GitHub token-exchange signup', () => {
