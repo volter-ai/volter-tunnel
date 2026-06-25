@@ -7,8 +7,27 @@
  * `usage`), or the root token (vtr_) for the admin operations.
  */
 
-/** Per-account usage as returned by the relay (shape owned by the relay). */
-export type AccountUsage = Record<string, unknown>;
+/** One usage/limit window (credits). */
+export interface UsageWindow {
+  used: number;
+  leased: number;
+  limit: number;
+  remaining: number;
+  pct: number;
+}
+
+/** Per-account usage as returned by the relay's /usage view. */
+export interface AccountUsage {
+  slug: string;
+  status: 'active' | 'suspended';
+  day: UsageWindow;
+  month: UsageWindow;
+  openTunnels: number;
+  concurrentMax: number;
+  resetAt: { day: string; month: string };
+  usd: { dayUsed: number; dayLimit: number; monthUsed: number; monthLimit: number };
+  raw?: Record<string, number>;
+}
 
 /** Result of `whoami()` — the caller's own account + usage. */
 export interface Me {

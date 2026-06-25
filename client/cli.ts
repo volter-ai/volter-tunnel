@@ -8,7 +8,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createTunnel, DEFAULT_HOST, type TunnelLogger, type TunnelOptions } from './tunnel-client';
+import { createTunnel, DEFAULT_HOST, type TunnelLogger, type TunnelOptions, VolterClient } from './tunnel-client';
+import { formatUsage, formatWhoami } from './format';
 
 /** Path of the saved api token from `volter-tunnel login`. */
 function tokenFilePath(): string {
@@ -126,11 +127,73 @@ if (import.meta.main) {
     }
   }
 
+  // `volter-tunnel whoami` / `usage` — read your own account via the saved token.
+  if (args[0] === 'whoami' || args[0] === 'usage') {
+    const token = flag('token') || readSavedToken();
+    if (!token) {
+      console.error('Not logged in — run `volter-tunnel login` first.');
+      process.exit(1);
+    }
+    try {
+      const me = await new VolterClient({ host, token }).whoami();
+      if (args.includes('--json')) {
+        console.log(JSON.stringify(args[0] === 'usage' ? me.usage : me, null, 2));
+      } else {
+        console.log(args[0] === 'usage' ? formatUsage(me.usage) : formatWhoami(me));
+      }
+      process.exit(0);
+    } catch (e) {
+      console.error(`${args[0]} failed:`, e instanceof Error ? e.message : String(e));
+      process.exit(1);
+    }
+  }
+
+  // `volter-tunnel account <…>` — admin ops; needs the root token.
+  if (args[0] === 'account') {
+    const root = flag('token') || process.env.VOLTER_ROOT_TOKEN;
+    if (!root) {
+      console.error('Admin commands need the root token (--token <vtr_…> or VOLTER_ROOT_TOKEN).');
+      process.exit(1);
+    }
+    const client = new VolterClient({ host, token: root });
+    const [, sub, slug] = args;
+    const usdBody = (): Record<string, number> => {
+      const b: Record<string, number> = {};
+      const d = flag('day-usd');
+      const m = flag('month-usd');
+      if (d !== undefined) b.dayUsd = Number(d);
+      if (m !== undefined) b.monthUsd = Number(m);
+      return b;
+    };
+    try {
+      let result: unknown;
+      if (sub === 'list') result = await client.usageSummary();
+      else if (sub === 'usage' && slug) result = await client.accountUsage(slug);
+      else if (sub === 'create' && slug) result = await client.createAccount({ slug, ...usdBody() });
+      else if (sub === 'limits' && slug) result = await client.patchLimits(slug, usdBody());
+      else if (sub === 'suspend' && slug) result = await client.setStatus(slug, 'suspended');
+      else if (sub === 'resume' && slug) result = await client.setStatus(slug, 'active');
+      else {
+        console.error(
+          'Usage: volter-tunnel account <list | usage <slug> | create <slug> | limits <slug> | suspend <slug> | resume <slug>> [--day-usd N] [--month-usd N]'
+        );
+        process.exit(1);
+      }
+      console.log(JSON.stringify(result, null, 2));
+      process.exit(0);
+    } catch (e) {
+      console.error('account command failed:', e instanceof Error ? e.message : String(e));
+      process.exit(1);
+    }
+  }
+
   const port = Number(flag('port'));
   if (!port) {
     console.error(
       'Usage:\n' +
         '  volter-tunnel login [--gist] [--token <t>] [--host <url>]\n' +
+        '  volter-tunnel whoami | usage [--json] [--host <url>]\n' +
+        '  volter-tunnel account <list|usage|create|limits|suspend|resume> [slug] [--day-usd N] [--month-usd N]\n' +
         '  volter-tunnel --port <port> [--host <url>] [--tunnel-id <id>] [--auth-not-required] [--basic-auth user:pass] [--no-qr]'
     );
     process.exit(1);
