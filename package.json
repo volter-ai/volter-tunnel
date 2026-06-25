@@ -4,11 +4,11 @@
   "description": "WebSocket HTTP/WS reverse tunnel client — embeddable library (createTunnel) + CLI + a typed relay SDK (VolterClient).",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yueranyuan/volter-tunnel.git"
+    "url": "git+https://github.com/volter-ai/volter-tunnel.git"
   },
-  "homepage": "https://github.com/yueranyuan/volter-tunnel#readme",
+  "homepage": "https://github.com/volter-ai/volter-tunnel#readme",
   "bugs": {
-    "url": "https://github.com/yueranyuan/volter-tunnel/issues"
+    "url": "https://github.com/volter-ai/volter-tunnel/issues"
   },
   "type": "module",
   "license": "Apache-2.0",

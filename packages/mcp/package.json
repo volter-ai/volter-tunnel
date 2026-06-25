@@ -4,9 +4,9 @@
   "description": "MCP server exposing volter-tunnel account/usage/abuse operations as tools for AI agents.",
   "type": "module",
   "license": "Apache-2.0",
-  "repository": { "type": "git", "url": "git+https://github.com/yueranyuan/volter-tunnel.git", "directory": "packages/mcp" },
-  "homepage": "https://github.com/yueranyuan/volter-tunnel/tree/main/packages/mcp#readme",
-  "bugs": { "url": "https://github.com/yueranyuan/volter-tunnel/issues" },
+  "repository": { "type": "git", "url": "git+https://github.com/volter-ai/volter-tunnel.git", "directory": "packages/mcp" },
+  "homepage": "https://github.com/volter-ai/volter-tunnel/tree/main/packages/mcp#readme",
+  "bugs": { "url": "https://github.com/volter-ai/volter-tunnel/issues" },
   "keywords": ["volter-tunnel", "mcp", "model-context-protocol", "tunnel"],
   "engines": { "bun": ">=1.0.0", "node": ">=18" },
   "bin": {
