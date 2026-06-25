@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
+import type { RelayToClient, RequestMsg, WsUpgradeMsg } from '@volter/tunnel-core';
 
 /** Default relay (Cloudflare Workers + Durable Objects). */
 const DEFAULT_HOST = 'https://volter-tunnel.aaron-0ed.workers.dev';
@@ -74,77 +75,10 @@ export interface TunnelHandle {
   close: () => void;
 }
 
-interface TunnelRequest {
-  type: 'request';
-  reqId: number;
-  method: string;
-  path: string;
-  headers: Record<string, string | string[] | undefined>;
-  body: string | null;
-}
-
-interface RateWindow {
-  limit: number;
-  remaining: number;
-  reset: number;
-}
-
-interface TunnelRegistered {
-  type: 'registered';
-  tunnelId: string;
-  url: string;
-  /** Metering snapshot for this account (present when the relay meters usage). */
-  account?: { slug: string; day: RateWindow; month: RateWindow; level: 'ok' | 'warn' | 'exceeded' };
-}
-
-/** Pushed by the relay when the account's usage level changes (ok→warn→exceeded). */
-interface TunnelQuota {
-  type: 'quota';
-  level: 'ok' | 'warn' | 'exceeded';
-  day: RateWindow;
-  month: RateWindow;
-}
-
-interface TunnelWsUpgrade {
-  type: 'ws-upgrade';
-  connId: number;
-  path: string;
-  headers: Record<string, string | string[] | undefined>;
-}
-
-interface TunnelWsMessage {
-  type: 'ws-message';
-  connId: number;
-  data: string; // base64
-  binary: boolean;
-}
-
-interface TunnelWsClose {
-  type: 'ws-close';
-  connId: number;
-  code?: number;
-  reason?: string;
-}
-
-interface TunnelRequestAbort {
-  type: 'request-abort';
-  reqId: number;
-}
-
-interface TunnelError {
-  type: 'error';
-  message: string;
-}
-
-type TunnelMessage =
-  | TunnelRequest
-  | TunnelRegistered
-  | TunnelWsUpgrade
-  | TunnelWsMessage
-  | TunnelWsClose
-  | TunnelRequestAbort
-  | TunnelError
-  | TunnelQuota;
+// The control-channel message types live in @volter/tunnel-core (the shared
+// protocol contract, imported above). The client receives RelayToClient frames
+// and forwards/relays them; RequestMsg and WsUpgradeMsg are the two it hands to
+// helpers below.
 
 // ============================================================================
 // Safe WebSocket close helpers
@@ -366,7 +300,7 @@ export function createTunnel({
     });
 
     ws.on('message', async (data: WebSocket.RawData) => {
-      let msg: TunnelMessage;
+      let msg: RelayToClient;
       try {
         msg = JSON.parse(data.toString());
       } catch (err) {
@@ -613,7 +547,7 @@ function handleWsUpgrade(
   port: number,
   localAddr: string,
   controlWs: WebSocket,
-  msg: TunnelWsUpgrade,
+  msg: WsUpgradeMsg,
   localWsConnections: Map<number, WebSocket>,
   log: TunnelLogger
 ): void {
@@ -770,7 +704,7 @@ function send502(ws: WebSocket, reqId: number, message: string): void {
 function forwardRequest(
   port: number,
   localAddr: string,
-  msg: TunnelRequest,
+  msg: RequestMsg,
   ws: WebSocket,
   activeRequests: Map<number, http.ClientRequest>,
   onConnRefused?: (err: NodeJS.ErrnoException) => Promise<boolean>
