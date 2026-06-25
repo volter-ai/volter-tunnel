@@ -11,7 +11,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { VolterClient } from '../../../client/api';
-import { buildTools } from './tools';
+import { type RegisterFn, wireTools } from './wire';
 
 const host = process.env.VOLTER_HOST ?? 'https://voltertest.xyz';
 const token = process.env.VOLTER_TOKEN;
@@ -20,28 +20,10 @@ if (!token) {
   process.exit(1);
 }
 
-const client = new VolterClient({ host, token });
 const server = new McpServer({ name: 'volter-tunnel', version: '0.1.0' });
-
-// The SDK's registerTool is generic over the (dynamic) input schema, which trips
-// "excessively deep" inference here. Bind it through a narrow signature — the
-// runtime contract is unchanged; only the call-site types are relaxed.
-type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
-const register = server.registerTool.bind(server) as unknown as (
-  name: string,
-  config: { description: string; inputSchema: unknown },
-  handler: (args: Record<string, unknown>) => Promise<ToolResult>
-) => void;
-
-for (const tool of buildTools(client)) {
-  register(tool.name, { description: tool.description, inputSchema: tool.inputSchema }, async (args) => {
-    try {
-      return { content: [{ type: 'text', text: await tool.run(args) }] };
-    } catch (e) {
-      return { isError: true, content: [{ type: 'text', text: e instanceof Error ? e.message : String(e) }] };
-    }
-  });
-}
+// The SDK's registerTool is generic over the (dynamic) schema, which trips
+// "excessively deep" inference; bind it through the narrow RegisterFn signature.
+wireTools(server.registerTool.bind(server) as unknown as RegisterFn, new VolterClient({ host, token }));
 
 await server.connect(new StdioServerTransport());
 console.error(`volter-tunnel MCP server ready (host ${host})`);
