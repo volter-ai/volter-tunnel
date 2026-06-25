@@ -1,114 +1,110 @@
-# @volter/tunnel
+# volter-tunnel
 
-WebSocket-based HTTP/WS reverse tunnel. Two halves that speak one wire protocol:
+[![CI](https://github.com/volter-app/tunnel/actions/workflows/ci.yml/badge.svg)](./.github/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
 
-- **`server/`** — a relay you host on a public domain. Browsers hit
-  `https://{tunnelId}.your-domain` and the relay forwards each request/response
-  (and WebSocket upgrade) over a control channel to a connected client.
-- **`client/`** — a connector library + CLI that runs next to a local server,
-  registers a `tunnelId` with the relay, and proxies traffic to a local port.
+An open-source, WebSocket-based **HTTP/WS reverse tunnel** — an ngrok /
+Cloudflare-Tunnel alternative whose headline feature is a **free, stable,
+reservable subdomain** that survives reconnects. Built on Cloudflare Workers +
+Durable Objects, so idle tunnels cost ~nothing.
 
-It supports HTTP, streaming responses, WebSocket relay, optional JWT auth
-(Bearer header, `?__volter_token=` query, or `__volter_auth` cookie), and
-CSP `frame-ancestors` stripping so tunneled apps can be embedded in iframes.
+```bash
+volter-tunnel login --host https://your-relay        # GitHub login, no OAuth app
+volter-tunnel --port 3000 --tunnel-id my-app         # → https://my-app.your-relay
+```
 
-> Runtime note: the published package ships TypeScript source for the client
-> (`client/tunnel-client.ts`). It is designed to be consumed under **Bun**
-> (which imports `.ts` directly), as in the Volter gateway/sandbox. The server
-> is plain ESM JavaScript and runs under Node.
+**Why it exists:** reserve a friendly subdomain once and keep it; expose a local
+port over HTTP, streaming, and WebSocket; gate it with basic-auth/JWT; embed the
+tunneled app in an iframe (it strips `frame-ancestors`/X-Frame-Options — no other
+OSS tunnel does this); inspect every request live. See
+[docs/DECISIONS.md](./docs/DECISIONS.md) for the full rationale.
 
 ## Install
 
 ```bash
-bun add @volter/tunnel        # client library + CLI (Bun)
-# jsonwebtoken is an optional peer dep, only needed by the server for JWT auth
+bun add @volter/tunnel        # client library + CLI (runs under Bun)
 ```
 
-## Client — library
+## CLI
+
+```bash
+volter-tunnel login [--gist] [--host <url>]          # prove a GitHub identity, save an api token
+volter-tunnel --port 3000 [--tunnel-id my-app]       # expose a local port; prints the URL (+ QR)
+volter-tunnel whoami                                  # your account + usage
+volter-tunnel usage [--json]                          # your current spend (today / month)
+volter-tunnel account <list|usage|create|limits|suspend|resume> [slug] \
+  [--day-usd N] [--month-usd N]                       # admin ops (needs the root token)
+```
+
+Common run flags: `--host <relayUrl>`, `--basic-auth user:pass`,
+`--auth-not-required`, `--no-qr`.
+
+## Library
 
 ```ts
 import { createTunnel } from '@volter/tunnel/client';
 
 const tunnel = await createTunnel({
-  port: 3000,                                   // local port to expose
-  host: 'https://vgit-tunnels.volterapp.com',   // relay URL
-  tunnelId: 'my-app',                           // -> https://my-app.<domain>
-  secret: process.env.TUNNEL_SECRET,            // must match relay's TUNNEL_SECRET
-  authRequired: false,
+  port: 3000,
+  host: 'https://your-relay',
+  tunnelId: 'my-app',              // → https://my-app.your-relay
 });
-
-console.log(tunnel.url);   // public URL
-// ... later
+console.log(tunnel.url);
+// … later
 tunnel.close();
 ```
 
-## Client — CLI
+And a typed client for the relay's management/self-service API:
+
+```ts
+import { VolterClient } from '@volter/tunnel/client';
+
+const client = new VolterClient({ host: 'https://your-relay', token });
+const me = await client.whoami();          // { slug, name, usage }
+await client.createAccount({ slug: 'x', dayUsd: 10 });   // root token
+```
+
+## MCP server (for AI agents)
+
+`@volter/tunnel-mcp` exposes account/usage/abuse operations as MCP tools
+(`whoami`, `usage`, `account_*`, `reports`, `waitlist`, `revoke_reservation`):
 
 ```bash
-# via the bin once installed
-volter-tunnel --port 3000 [--host <relayUrl>] [--tunnel-id <id>] [--auth-not-required]
-
-# or directly with Bun
-bun run node_modules/@volter/tunnel/client/tunnel-client.ts --port 3000
+VOLTER_HOST=https://your-relay VOLTER_TOKEN=<token> volter-tunnel-mcp
 ```
 
-Defaults: `--host` falls back to `$TUNNEL_SERVER_URL` then
-`https://vgit-tunnels.volterapp.com`.
+## Architecture
 
-## Server — deploy
+A monorepo with one shared protocol contract consumed by both sides:
 
-The relay lives in `server/` with a Dockerfile and a Fly.io config
-(`server/fly.toml`, app `mc-tunnel`, domain `vgit-tunnels.volterapp.com`).
+```
+packages/core/   @volter/tunnel-core — the wire protocol (message union + frame
+                 codec + DTOs). Pure, dependency-free, 100% covered.
+client/          @volter/tunnel — core ← transport ← sdk (createTunnel +
+                 VolterClient) ← cli (the bin).
+packages/mcp/    @volter/tunnel-mcp — MCP server over the SDK.
+server-cf/       Cloudflare Worker + Durable Objects relay (primary). One DO per
+                 tunnelId holds the hibernatable control socket → idle = free.
+server/          a legacy single-process Fly relay (same wire protocol).
+```
+
+The protocol lives in `core` and nowhere else, so the client and relay can't
+drift — a change to the contract is type-checked on both sides.
+
+## Develop
 
 ```bash
-cd server
-fly deploy            # deploy the relay to Fly.io
-# or run locally:
-npm install && node server.mjs
+bun install
+bun run typecheck                                  # client + core + mcp
+cd packages/core && bun test                       # protocol (100% gate)
+cd packages/mcp  && bun test                       # MCP tools
+bun test ./test                                    # client SDK + CLI
+cd server-cf && npm install && npx vitest run      # relay (real workerd, no mocks)
 ```
 
-### Server environment variables
+See [CONTRIBUTING.md](./CONTRIBUTING.md). Deploy the relay with
+[docs/DEPLOY.md](./docs/DEPLOY.md).
 
-| Var | Purpose |
-|---|---|
-| `PORT` | Port the relay listens on (Fly: `8080`) |
-| `TUNNEL_DOMAIN` | Public base domain, e.g. `vgit-tunnels.volterapp.com` |
-| `TUNNEL_SECURE` | `true` to emit `https`/`wss` public URLs |
-| `TUNNEL_SECRET` | Shared secret clients must present in `register` |
-| `JWT_SECRET` | HS256 secret for validating end-user auth tokens (optional) |
+## License
 
-Client and relay must share the same `TUNNEL_SECRET`.
-
-## Server — scalable relay (Cloudflare Workers + Durable Objects)
-
-`server/` (the Fly relay) is a single stateful process and does not scale
-horizontally. For large/global scale there is a drop-in alternative in
-`server-cf/`: a Cloudflare **Worker** that routes by subdomain to **one Durable
-Object per tunnelId**, which holds the client's control socket (hibernatable, so
-idle tunnels are ~free). Same wire protocol and client — the only client-visible
-change is that `createTunnel` appends `?id=<tunnelId>` to the control URL so the
-Worker can pick the right DO (the Fly relay tolerates and ignores it).
-
-```bash
-cd server-cf
-npm run dev      # wrangler dev --local (real workerd)
-npm test         # vitest: real Worker+DO + createTunnel, no mocks
-npm run deploy   # wrangler deploy (needs a CF zone for the wildcard host)
-```
-
-The apex domain (no tunnel subdomain) serves a public **landing page** at `/`
-with a waitlist form, getting-started **docs** at `/docs`, and the management
-plane (`/admin`, `/signup`, `/report`, `/waitlist`). Tunnel subdomains forward
-every path to their tunnel. See [docs/DEPLOY.md](./docs/DEPLOY.md) for the
-operator runbook (incl. approving waitlist requests).
-
-## Layout
-
-```
-@volter/tunnel
-├── client/tunnel-client.ts   # createTunnel() + CLI  (export "./client", bin "volter-tunnel")
-└── server/                   # relay (export "./server")
-    ├── server.mjs
-    ├── Dockerfile
-    └── fly.toml
-```
+[Apache-2.0](./LICENSE) © Volter.
