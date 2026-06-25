@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    name: typecheck + unit (bun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - name: Typecheck (client + core + mcp)
+        run: bun run typecheck
+      - name: Core protocol tests (100% coverage gate)
+        run: cd packages/core && bun test
+      - name: MCP tools tests (coverage gate)
+        run: cd packages/mcp && bun test
+      - name: Client SDK + CLI tests
+        run: bun test ./test
+
+  relay:
+    name: relay (cloudflare workerd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - name: Install relay deps
+        run: cd server-cf && npm install
+      - name: Relay tests (real workerd, no mocks)
+        run: cd server-cf && npx vitest run
