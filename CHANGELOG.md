@@ -1,9 +1,11 @@
 # Changelog
 
 All notable changes to this project are documented here. The format is based on
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). All three publishable
+packages (`@volter/tunnel`, `@volter/tunnel-core`, `@volter/tunnel-mcp`) version
+in lockstep.
 
-## [Unreleased]
+## [Unreleased] — 0.1.0 (first public release, not yet tagged)
 
 ### Added
 

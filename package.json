@@ -1,6 +1,6 @@
 {
   "name": "@volter/tunnel",
-  "version": "1.2.0",
+  "version": "0.1.0",
   "description": "WebSocket HTTP/WS reverse tunnel client — embeddable library (createTunnel) + CLI + a typed relay SDK (VolterClient).",
   "repository": {
     "type": "git",
