@@ -139,6 +139,21 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     return null;
   }
 
+  /** Resolve a service OR api token to its account slug (self-service /me).
+   *  Unlike authenticate(), this also accepts api tokens — the credential a
+   *  logged-in user holds — so they can read their own account without root. */
+  private async resolveAccountToken(request: Request): Promise<{ slug: string } | null> {
+    const token = this.bearer(request);
+    if (!token) return null;
+    const hash = await hashToken(token);
+    for (const rec of this.tokens.values()) {
+      if ((rec.kind === 'service' || rec.kind === 'api') && !rec.revokedAt && safeEqualHex(rec.hash, hash)) {
+        return { slug: rec.slug };
+      }
+    }
+    return null;
+  }
+
   /** Σ of account limits, optionally excluding one slug (for in-place edits). */
   private allocated(exclude?: string): { day: number; month: number } {
     let day = 0;
@@ -281,6 +296,16 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     if (url.pathname === '/waitlist') {
       if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
       return this.addWaitlist((await request.json().catch(() => ({}))) as Record<string, unknown>);
+    }
+
+    // Self-service: a service or api token reads its OWN account + usage. Lets a
+    // logged-in user run `volter-tunnel whoami` / `usage` without the root token.
+    if (url.pathname === '/me') {
+      if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
+      const who = await this.resolveAccountToken(request);
+      if (!who) return json({ error: 'unauthorized' }, 401);
+      const dir = this.accounts.get(who.slug);
+      return json({ slug: who.slug, name: dir?.name, usage: await this.accountUsage(who.slug) });
     }
 
     // Fleet usage summary (root): every account's live usage + dollars in one call.
