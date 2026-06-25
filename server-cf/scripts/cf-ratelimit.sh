@@ -9,7 +9,14 @@
 # Idempotent: PUTs the whole http_ratelimit entrypoint ruleset (one rule).
 set -euo pipefail
 
-: "${CLOUDFLARE_API_TOKEN:?Set CLOUDFLARE_API_TOKEN (a token with Zone WAF: Edit)}"
+# Auto-load a local, gitignored .env (repo root or server-cf/) so the token can
+# be persisted there instead of pasted each run.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for envf in "$PWD/.env" "${SCRIPT_DIR}/../../.env" "${SCRIPT_DIR}/../.env"; do
+  if [ -f "$envf" ]; then set -a; . "$envf"; set +a; break; fi
+done
+
+: "${CLOUDFLARE_API_TOKEN:?Set CLOUDFLARE_API_TOKEN (a token with Zone WAF: Edit) — e.g. in a gitignored .env}"
 ZONE_NAME="${ZONE_NAME:-voltertest.xyz}"
 REQUESTS="${REQUESTS:-20}"     # requests allowed per period, per IP
 PERIOD="${PERIOD:-10}"      # seconds (free plan: 10)
