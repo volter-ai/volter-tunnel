@@ -106,6 +106,42 @@ async function renderQr(url: string, write: (s: string) => void): Promise<void> 
   }
 }
 
+// ── command implementations (exported for unit testing; the bin is thin) ──────
+
+/** `whoami` — identity + usage summary (or raw JSON). */
+export async function runWhoami(client: VolterClient, json = false): Promise<string> {
+  const me = await client.whoami();
+  return json ? JSON.stringify(me, null, 2) : formatWhoami(me);
+}
+
+/** `usage` — just the usage block (or raw JSON). */
+export async function runUsage(client: VolterClient, json = false): Promise<string> {
+  const me = await client.whoami();
+  return json ? JSON.stringify(me.usage, null, 2) : formatUsage(me.usage);
+}
+
+/** `account <sub> [slug]` admin dispatch → pretty JSON. Throws on a bad subcommand. */
+export async function runAccount(
+  client: VolterClient,
+  sub: string | undefined,
+  slug: string | undefined,
+  usd: { dayUsd?: number; monthUsd?: number } = {}
+): Promise<string> {
+  let result: unknown;
+  if (sub === 'list') result = await client.usageSummary();
+  else if (sub === 'usage' && slug) result = await client.accountUsage(slug);
+  else if (sub === 'create' && slug) result = await client.createAccount({ slug, ...usd });
+  else if (sub === 'limits' && slug) result = await client.patchLimits(slug, usd);
+  else if (sub === 'suspend' && slug) result = await client.setStatus(slug, 'suspended');
+  else if (sub === 'resume' && slug) result = await client.setStatus(slug, 'active');
+  else {
+    throw new Error(
+      'Usage: volter-tunnel account <list | usage <slug> | create <slug> | limits <slug> | suspend <slug> | resume <slug>> [--day-usd N] [--month-usd N]'
+    );
+  }
+  return JSON.stringify(result, null, 2);
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
 
@@ -135,12 +171,9 @@ if (import.meta.main) {
       process.exit(1);
     }
     try {
-      const me = await new VolterClient({ host, token }).whoami();
-      if (args.includes('--json')) {
-        console.log(JSON.stringify(args[0] === 'usage' ? me.usage : me, null, 2));
-      } else {
-        console.log(args[0] === 'usage' ? formatUsage(me.usage) : formatWhoami(me));
-      }
+      const client = new VolterClient({ host, token });
+      const json = args.includes('--json');
+      console.log(args[0] === 'usage' ? await runUsage(client, json) : await runWhoami(client, json));
       process.exit(0);
     } catch (e) {
       console.error(`${args[0]} failed:`, e instanceof Error ? e.message : String(e));
@@ -155,31 +188,13 @@ if (import.meta.main) {
       console.error('Admin commands need the root token (--token <vtr_…> or VOLTER_ROOT_TOKEN).');
       process.exit(1);
     }
-    const client = new VolterClient({ host, token: root });
-    const [, sub, slug] = args;
-    const usdBody = (): Record<string, number> => {
-      const b: Record<string, number> = {};
-      const d = flag('day-usd');
-      const m = flag('month-usd');
-      if (d !== undefined) b.dayUsd = Number(d);
-      if (m !== undefined) b.monthUsd = Number(m);
-      return b;
-    };
+    const usd: { dayUsd?: number; monthUsd?: number } = {};
+    const d = flag('day-usd');
+    const m = flag('month-usd');
+    if (d !== undefined) usd.dayUsd = Number(d);
+    if (m !== undefined) usd.monthUsd = Number(m);
     try {
-      let result: unknown;
-      if (sub === 'list') result = await client.usageSummary();
-      else if (sub === 'usage' && slug) result = await client.accountUsage(slug);
-      else if (sub === 'create' && slug) result = await client.createAccount({ slug, ...usdBody() });
-      else if (sub === 'limits' && slug) result = await client.patchLimits(slug, usdBody());
-      else if (sub === 'suspend' && slug) result = await client.setStatus(slug, 'suspended');
-      else if (sub === 'resume' && slug) result = await client.setStatus(slug, 'active');
-      else {
-        console.error(
-          'Usage: volter-tunnel account <list | usage <slug> | create <slug> | limits <slug> | suspend <slug> | resume <slug>> [--day-usd N] [--month-usd N]'
-        );
-        process.exit(1);
-      }
-      console.log(JSON.stringify(result, null, 2));
+      console.log(await runAccount(new VolterClient({ host, token: root }), args[1], args[2], usd));
       process.exit(0);
     } catch (e) {
       console.error('account command failed:', e instanceof Error ? e.message : String(e));
