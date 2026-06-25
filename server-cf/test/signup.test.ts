@@ -159,6 +159,30 @@ afterAll(async () => {
   await new Promise<void>((r) => stub?.close(() => r()));
 });
 
+describe('self-service /me (api token reads its own account + usage)', () => {
+  test('GET /me returns the caller account + usage for its api token', async () => {
+    const signup = await post(port, '/signup/github', { token: 'good-token' });
+    expect(signup.status).toBe(200);
+    const apiToken = signup.json.token as string;
+
+    const me = await get(port, '/me', { authorization: `Bearer ${apiToken}` });
+    expect(me.status).toBe(200);
+    const body = JSON.parse(me.body) as { slug: string; usage: unknown };
+    expect(body.slug).toBe('gh-4242');
+    expect(body.usage).toBeTruthy();
+  }, 20000);
+
+  test('GET /me without a token is 401', async () => {
+    const res = await get(port, '/me');
+    expect(res.status).toBe(401);
+  });
+
+  test('GET /me with a bogus token is 401', async () => {
+    const res = await get(port, '/me', { authorization: 'Bearer vta_not_a_real_token' });
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('GitHub token-exchange signup', () => {
   test('a valid token provisions a gh-<id> account and returns a usable api token', async () => {
     const res = await post(port, '/signup/github', { token: 'good-token' });

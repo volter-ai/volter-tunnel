@@ -11,6 +11,7 @@ import { forwardRequest, handleWsUpgrade, http1Agent, resolveLocalHost, safeClos
 import type { TunnelHandle, TunnelLogger, TunnelOptions } from './types';
 
 export type { TunnelHandle, TunnelLogger, TunnelOptions } from './types';
+export { VolterApiError, VolterClient, type AccountUsage, type Me, type VolterClientOptions } from './api';
 
 /** Default relay (Cloudflare Workers + Durable Objects). */
 export const DEFAULT_HOST = 'https://volter-tunnel.aaron-0ed.workers.dev';
