@@ -100,6 +100,10 @@ curl -s $BASE/admin/usage    -H "Authorization: Bearer $ROOT_TOKEN"
   user already on the allowlist who submits the form is told they can sign up now.
 - **Tune fair-use**: raise `BURST_RPS` if you see request floods; the daily/
   monthly credit caps are the primary limit.
+- **Edge rate-limit (per-IP)**: add a Cloudflare WAF rate-limit rule on the
+  unauthenticated surface with `CLOUDFLARE_API_TOKEN=… bash server-cf/scripts/cf-ratelimit.sh`
+  (needs a token with Zone → WAF → Edit). Complements the in-DO `SIGNUP_RPS`
+  limiter (which is global, not per-IP).
 - **Rotate root**: `wrangler secret put ROOT_TOKEN` + redeploy (no lockout — the
   env secret is the source of truth).
 
