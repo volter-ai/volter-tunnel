@@ -24,8 +24,9 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p packages/core/tsconfig.json && tsc --noEmit -p packages/mcp/tsconfig.json",
-    "test": "bun test ./test ./packages/core/test",
+    "test": "bun test ./test && (cd packages/core && bun test) && (cd packages/mcp && bun test)",
     "test:cf": "cd server-cf && vitest run",
+    "test:all": "bun run test && bun run test:cf",
     "lint": "biome check client packages server-cf/src examples",
     "format": "biome format --write client packages server-cf/src examples",
     "tunnel": "bun run client/tunnel-client.ts",
