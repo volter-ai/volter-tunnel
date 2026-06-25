@@ -4,7 +4,7 @@
  * is asserted here.
  */
 import { describe, expect, test } from 'bun:test';
-import { formatConnectBanner } from '../client/tunnel-client.ts';
+import { formatConnectBanner } from '../client/cli.ts';
 
 describe('formatConnectBanner', () => {
   test('shows the public URL and the forwarded local port', () => {
