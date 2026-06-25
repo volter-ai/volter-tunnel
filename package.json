@@ -26,6 +26,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p packages/core/tsconfig.json && tsc --noEmit -p packages/mcp/tsconfig.json",
     "test": "bun test ./test ./packages/core/test",
     "test:cf": "cd server-cf && vitest run",
+    "lint": "biome check client packages",
+    "format": "biome format --write client packages",
     "tunnel": "bun run client/tunnel-client.ts",
     "server": "node server/server.mjs"
   },
@@ -42,6 +44,7 @@
     }
   },
   "devDependencies": {
+    "@biomejs/biome": "1.9.4",
     "@types/jsonwebtoken": "^9.0.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.14",

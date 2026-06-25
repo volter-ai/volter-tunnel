@@ -4,13 +4,7 @@
  * registry that both the client and the relay must agree on.
  */
 import { describe, expect, test } from 'bun:test';
-import {
-  decodeFrame,
-  encodeFrame,
-  isControlMessage,
-  MESSAGE_TYPES,
-  type ControlMessage,
-} from '../src/index';
+import { decodeFrame, encodeFrame, isControlMessage, MESSAGE_TYPES, type ControlMessage } from '../src/index';
 
 // One representative value for every message in the protocol, both directions.
 const samples: ControlMessage[] = [
@@ -88,7 +82,9 @@ describe('type registry + guards', () => {
   });
 
   test('isControlMessage narrows valid messages and rejects junk', () => {
-    expect(isControlMessage({ type: 'request', reqId: 1, method: 'GET', path: '/', headers: {}, body: null })).toBe(true);
+    expect(isControlMessage({ type: 'request', reqId: 1, method: 'GET', path: '/', headers: {}, body: null })).toBe(
+      true
+    );
     expect(isControlMessage({ type: 'bogus' })).toBe(false);
     expect(isControlMessage(null)).toBe(false);
     expect(isControlMessage('x')).toBe(false);

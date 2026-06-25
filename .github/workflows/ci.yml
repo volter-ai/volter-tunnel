@@ -18,6 +18,8 @@ jobs:
         with:
           node-version: 22
       - run: bun install --frozen-lockfile
+      - name: Lint + format check (Biome)
+        run: bun run lint
       - name: Typecheck (client + core + mcp)
         run: bun run typecheck
       - name: Core protocol tests (100% coverage gate)

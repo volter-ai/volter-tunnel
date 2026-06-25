@@ -112,7 +112,10 @@ export class VolterClient {
     return this.request('PATCH', `/admin/accounts/${encodeURIComponent(slug)}/limits`, body);
   }
   setStatus(slug: string, status: 'active' | 'suspended'): Promise<unknown> {
-    return this.request('POST', `/admin/accounts/${encodeURIComponent(slug)}/${status === 'suspended' ? 'suspend' : 'resume'}`);
+    return this.request(
+      'POST',
+      `/admin/accounts/${encodeURIComponent(slug)}/${status === 'suspended' ? 'suspend' : 'resume'}`
+    );
   }
   accountUsage(slug: string): Promise<unknown> {
     return this.request('GET', `/admin/accounts/${encodeURIComponent(slug)}/usage`);
