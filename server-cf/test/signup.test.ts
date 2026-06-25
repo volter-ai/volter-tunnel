@@ -320,6 +320,15 @@ describe('public front door (landing + docs + waitlist)', () => {
     expect(res.body).not.toContain('id="waitlist"');
   });
 
+  test('?__tunnel override is IGNORED on the public domain (isolation)', async () => {
+    // On the apex/public host the override must not route to an arbitrary tunnel;
+    // it falls through to the apex front door. (It is only honored on direct hosts
+    // like *.workers.dev / localhost.) If it were applied we'd get a 502.
+    const res = await get(port, '/?__tunnel=evil', { host: DOMAIN });
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('id="waitlist"');
+  });
+
   test('apex GET /docs serves the docs page', async () => {
     const res = await get(port, '/docs');
     expect(res.status).toBe(200);
