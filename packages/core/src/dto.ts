@@ -31,9 +31,26 @@ export interface AccountSnapshot {
   level: UsageLevel;
 }
 
-/** A reserved tunnel id and who holds it (relay-side ownership record). */
-export interface Reservation {
-  tunnelId: string;
-  ownerSlug: string;
-  lastSeenAt: number;
+/** One detailed usage/limit window for the GET /usage view (credits). */
+export interface UsageWindow {
+  used: number;
+  leased: number;
+  limit: number;
+  remaining: number;
+  pct: number;
+}
+
+/** The detailed per-account usage view returned by GET /me and
+ *  GET /admin/accounts/:slug/usage. The single shape both the relay produces and
+ *  the SDK consumes. */
+export interface AccountUsage {
+  slug: string;
+  status: 'active' | 'suspended';
+  day: UsageWindow;
+  month: UsageWindow;
+  openTunnels: number;
+  concurrentMax: number;
+  resetAt: { day: string; month: string };
+  usd: { dayUsed: number; dayLimit: number; monthUsed: number; monthLimit: number };
+  raw?: { requests: number; wsUpgrades: number; bytes: number; seconds: number };
 }
