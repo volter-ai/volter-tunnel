@@ -564,7 +564,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
 
   // ── abuse controls (#3) ──────────────────────────────────────────────────────
   private async addReport(body: Record<string, unknown>): Promise<Response> {
-    const tunnelId = String(body.tunnelId ?? '').trim();
+    const tunnelId = String(body.tunnelId ?? '').trim().slice(0, 200);
     if (!tunnelId) return json({ error: 'missing tunnelId' }, 400);
     const reason = String(body.reason ?? '').slice(0, 500);
     this.reports.push({ tunnelId, reason, at: new Date().toISOString() });

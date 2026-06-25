@@ -1047,4 +1047,15 @@ describe('abuse reports (#3)', () => {
     const r = await admin(port, 'GET', '/admin/reports', acmeService);
     expect(r.status).toBe(403);
   });
+
+  test('an oversized tunnelId is capped (no storage amplification)', async () => {
+    const huge = 'x'.repeat(10_000);
+    const filed = await admin(port, 'POST', '/report', null, { tunnelId: huge, reason: 'spam' });
+    expect(filed.status).toBe(200);
+    const list = await admin(port, 'GET', '/admin/reports', ROOT_TOKEN);
+    const reports = list.json.reports as Array<{ tunnelId: string }>;
+    const stored = reports.find((r) => r.tunnelId.startsWith('x'));
+    expect(stored).toBeDefined();
+    expect(stored!.tunnelId.length).toBe(200);
+  });
 });

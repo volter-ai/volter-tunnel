@@ -82,9 +82,12 @@
     //   GITHUB_API_BASE      — override the GitHub API (default api.github.com).
   },
 
-  // workers_dev keeps <name>.<acct>.workers.dev available for the control channel
-  // (clients connect to <host>/ws?id=...). The wildcard route serves tunnel data.
-  "workers_dev": true,
+  // workers_dev is OFF: all ingress must go through the zone routes below so the
+  // WAF rate-limit rule covers the unauthenticated surface (/signup,/report,
+  // /waitlist). The control channel (/ws) is host-independent and served by the
+  // apex route; *.workers.dev is not needed in prod (localhost covers __tunnel
+  // testing). Leaving it on would expose an un-WAF'd <name>.<acct>.workers.dev.
+  "workers_dev": false,
   "routes": [
     { "pattern": "*.voltertest.xyz/*", "zone_name": "voltertest.xyz" },
     // Bare apex serves the public front door (landing/docs/management). The apex
