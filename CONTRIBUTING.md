@@ -12,7 +12,6 @@ client/          @volter/tunnel — the client: core ← transport ← sdk (crea
                  + VolterClient) ← cli (the bin). Also the api/format SDK helpers.
 packages/mcp/    @volter/tunnel-mcp — an MCP server exposing account/usage tools.
 server-cf/       the Cloudflare Workers + Durable Objects relay (primary).
-server/          a legacy single-process Fly relay (same protocol).
 ```
 
 The protocol is defined **once** in `packages/core`; the client and the relay

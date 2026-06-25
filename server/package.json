@@ -1,9 +1,0 @@
-{
-  "name": "volter-tunnel-server",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "jsonwebtoken": "^9.0.2",
-    "ws": "^8.19.0"
-  }
-}

@@ -44,7 +44,6 @@
       "dist",
       "build",
       ".wrangler",
-      "server/server.mjs",
       "**/*.md",
       "**/*.json",
       "**/*.jsonc"

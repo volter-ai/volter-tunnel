@@ -3,9 +3,8 @@
  *
  * Holds the tunnel client's control WebSocket (hibernatable) and relays inbound
  * HTTP requests and browser WebSocket connections over it, using the same wire
- * protocol as server/server.mjs. Because there is exactly one DO per tunnelId
- * (Worker routes via idFromName(tunnelId)), the multi-tenant `clients` Map from
- * server.mjs collapses to "the one control socket this DO holds".
+ * protocol defined in @volter/tunnel-core. Because there is exactly one DO per tunnelId
+ * (Worker routes via idFromName(tunnelId)), the multi-tenant `clients` map a single-process relay needs collapses to "the one control socket this DO holds".
  *
  * Hibernation model: WebSockets + their serialized attachments survive eviction
  * (re-fetched via ctx.getWebSockets(tag)). In-memory correlation maps only need
@@ -124,8 +123,7 @@ function headersToObject(headers: Headers): Record<string, string> {
 /**
  * Clamp a WebSocket close reason to 123 UTF-8 bytes (a control frame's reason is
  * capped at 125 bytes minus the 2-byte code). close() throws RangeError otherwise
- * — server.mjs added this guard after one oversized relayed reason crash-looped
- * the whole relay. Drops a trailing replacement char from a severed sequence.
+ * — this guard was added after one oversized relayed reason crash-looped a relay. Drops a trailing replacement char from a severed sequence.
  */
 function truncateReason(value: unknown): string {
   const s = String(value ?? '');
@@ -502,7 +500,7 @@ export class TunnelDO extends DurableObject<Env> {
   // authorized via the auth-gated /__volter_replay endpoint, so it skips the
   // burst/auth/endpoint preamble and goes straight to meter + forward.
   private async handleHttpRequest(request: Request, url: URL, isReplay = false): Promise<Response> {
-    // Answer CORS preflight BEFORE the connectivity check (mirrors server.mjs) so
+    // Answer CORS preflight BEFORE the connectivity check (answer it early) so
     // a momentarily-down tunnel doesn't surface a CORS error to the browser.
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
@@ -689,8 +687,7 @@ export class TunnelDO extends DurableObject<Env> {
     const forwardHeaders = stripAuthCookie(headersToObject(request.headers));
 
     // Await ws-ready BEFORE returning 101 — so the browser's socket only opens
-    // once the local end is connected. This removes the message-buffering dance
-    // that server.mjs needs (it can't delay its upgrade).
+    // once the local end is connected. This removes the message-buffering dance a single-process relay needs (it can't delay its upgrade).
     const ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingUpgrades.delete(connId);
@@ -817,7 +814,7 @@ export class TunnelDO extends DurableObject<Env> {
     }
 
     // Control socket gone → tear down EVERYTHING for this tunnel (mirrors
-    // server.mjs:751-794): close browser relays, fail pending requests/upgrades,
+    // close browser relays, fail pending requests/upgrades,
     // error open streams. Without this, a client disconnect mid-stream leaks hung
     // browser connections and never-resolving responses.
     for (const b of this.ctx.getWebSockets('browser')) {
