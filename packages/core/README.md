@@ -27,9 +27,9 @@ const msg = decodeFrame(raw); // ControlMessage | null (null on junk/unknown typ
   registry, and the `isControlMessage` guard.
 - **`frame.ts`** — `encodeFrame` / `decodeFrame` (JSON framing today; isolated so
   the transport can evolve without touching call sites).
-- **`dto.ts`** — `RateWindow`, `UsageLevel`, `AccountSnapshot`, `Reservation`, and
-  `CorrelationId` (`string | number` — the CF relay uses UUID strings, the Fly
-  relay numeric counters; clients treat it opaquely).
+- **`dto.ts`** — `HeaderMap`, `RateWindow`, `UsageLevel`, `AccountSnapshot`,
+  `UsageWindow`, `AccountUsage`, and `CorrelationId` (`string | number` — the CF
+  relay uses UUID strings; clients treat it opaquely).
 
 ## Develop
 

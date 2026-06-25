@@ -70,7 +70,7 @@ await client.createAccount({ slug: 'x', dayUsd: 10 });   // root token
 (`whoami`, `usage`, `account_*`, `reports`, `waitlist`, `revoke_reservation`):
 
 ```bash
-VOLTER_HOST=https://your-relay VOLTER_TOKEN=<token> volter-tunnel-mcp
+VOLTER_HOST=https://your-relay VOLTER_TOKEN=<token> bunx @volter/tunnel-mcp
 ```
 
 ## Architecture

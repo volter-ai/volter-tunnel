@@ -38,10 +38,10 @@ All commands run from `server-cf/`.
   set. So the three modes are: allowlist (this set), fully open (`SIGNUP_OPEN=true`,
   no allowlist), or closed (neither — the safe default).
   **LAUNCH POLICY (DECISIONS D6): WAITLIST ONLY.** SET on the live worker (seeded
-  with `yueranyuan`) → signup is closed to the public; only listed logins can
+  with `<your-login>`) → signup is closed to the public; only listed logins can
   self-provision, everyone else gets 403. To approve someone off the waitlist,
   append their login and re-put:
-  `printf 'yueranyuan,newlogin' | wrangler secret put SIGNUP_ALLOWED_USERS`.
+  `printf '<your-login>,newlogin' | wrangler secret put SIGNUP_ALLOWED_USERS`.
 - `JWT_SECRET` — optional; HS256 secret for end-user JWT/cookie auth on tunnels.
 - `TUNNEL_SECRET` — optional legacy shared secret → the internal account. Set it
   if your own gateway uses the shared-secret path; **omit for a pure-signup
@@ -95,7 +95,7 @@ curl -s $BASE/admin/usage    -H "Authorization: Bearer $ROOT_TOKEN"
   (`GET /docs`); its form posts to `POST /waitlist`. Review requests with
   `GET /admin/waitlist` (root). **Approve someone** by appending their GitHub
   login to the allowlist secret and re-putting it:
-  `printf 'yueranyuan,newlogin' | wrangler secret put SIGNUP_ALLOWED_USERS`
+  `printf '<your-login>,newlogin' | wrangler secret put SIGNUP_ALLOWED_USERS`
   (the waitlist is a request queue only — approval is the env-secret edit). A
   user already on the allowlist who submits the form is told they can sign up now.
 - **Tune fair-use**: raise `BURST_RPS` if you see request floods; the daily/

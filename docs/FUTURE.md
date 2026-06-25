@@ -2,8 +2,8 @@
 
 Everything deferred out of the free-tier build, with *what unblocks it*. The
 free tier (Phase 0 + 1 + #10) is built, deployed, and hardened — see
-[ROADMAP.md](./ROADMAP.md). No git remote is configured, so this file is the
-backlog of record (convert to issues once a remote exists).
+[ROADMAP.md](./ROADMAP.md). This file is the backlog of record (convert to
+GitHub issues as items are picked up).
 
 ---
 

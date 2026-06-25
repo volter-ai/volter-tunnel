@@ -11,3 +11,6 @@ server-cf/.dev.vars
 .wrangler/
 server-cf/.root-token
 server-cf/.proof-*
+
+# local operator scratch (live-proof scripts; may reference private deployments)
+server-cf/proof*.ts

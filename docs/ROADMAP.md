@@ -30,7 +30,7 @@ Also fixed a routing-collision bug: management paths (`/admin`, `/signup`,
 Also done (Phase 2): **#10** inspector replay + persisted history
 (`INSPECT_REPLAY`, off by default; DO-storage cost is the paid driver).
 
-**Deployed to production** (`volter-tunnel.relay.internal.example` +
+**Deployed to production** (`the production relay` +
 `*.voltertest.xyz`), allowlist signup live, security review done + hardened
 (see SECURITY.md). Full suite green.
 

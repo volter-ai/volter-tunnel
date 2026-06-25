@@ -1,6 +1,6 @@
 name: Release
 
-# Publishes the three packages to npm on a version tag (e.g. v1.3.0).
+# Publishes the three packages to npm on a version tag (e.g. v2.0.0).
 # Requires an NPM_TOKEN repo secret. Publish order matters: core → client → mcp.
 # `bun publish` rewrites the `workspace:*` dependency to the real version.
 
