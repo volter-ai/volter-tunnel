@@ -7,27 +7,9 @@
  * `usage`), or the root token (vtr_) for the admin operations.
  */
 
-/** One usage/limit window (credits). */
-export interface UsageWindow {
-  used: number;
-  leased: number;
-  limit: number;
-  remaining: number;
-  pct: number;
-}
+import type { AccountUsage, UsageWindow } from '@volter/tunnel-core';
 
-/** Per-account usage as returned by the relay's /usage view. */
-export interface AccountUsage {
-  slug: string;
-  status: 'active' | 'suspended';
-  day: UsageWindow;
-  month: UsageWindow;
-  openTunnels: number;
-  concurrentMax: number;
-  resetAt: { day: string; month: string };
-  usd: { dayUsed: number; dayLimit: number; monthUsed: number; monthLimit: number };
-  raw?: Record<string, number>;
-}
+export type { AccountUsage, UsageWindow };
 
 /** Result of `whoami()` — the caller's own account + usage. */
 export interface Me {

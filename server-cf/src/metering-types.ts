@@ -3,6 +3,11 @@
  * (AccountDO), plus the extended Worker `Env`.
  */
 import type { TokenKind } from './credits';
+// The usage/rate DTOs live in @volter/tunnel-core (re-exported via ./protocol),
+// so the relay and the client SDK share one definition. Type-only import.
+import type { AccountUsage, RateWindow } from './protocol';
+
+export type { RateWindow };
 
 export interface MeteringEnv {
   /** AccountDO namespace — one instance per account slug (idFromName(slug)). */
@@ -87,26 +92,9 @@ export interface TokenRecord {
   revokedAt: string | null;
 }
 
-/** A point-in-time usage snapshot returned by GET /admin/accounts/:slug/usage. */
-export interface UsageView {
-  slug: string;
-  status: AccountConfig['status'];
-  day: { used: number; leased: number; limit: number; remaining: number; pct: number };
-  month: { used: number; leased: number; limit: number; remaining: number; pct: number };
-  openTunnels: number;
-  concurrentMax: number;
-  raw: { requests: number; wsUpgrades: number; bytes: number; seconds: number };
-  resetAt: { day: string; month: string };
-  /** The same usage/limits expressed in dollars (credits × COST_PER_OP_USD). */
-  usd: { dayUsed: number; dayLimit: number; monthUsed: number; monthLimit: number };
-}
-
-/** One limit window. `reset` is the UTC epoch-seconds at which it refills. */
-export interface RateWindow {
-  limit: number;
-  remaining: number;
-  reset: number;
-}
+/** The detailed per-account usage view (GET /usage, /me). Canonical shape lives
+ *  in @volter/tunnel-core; aliased here for the relay. */
+export type UsageView = AccountUsage;
 
 /** A point-in-time rate snapshot, surfaced on the data + control planes. */
 export interface RateSnapshot {
