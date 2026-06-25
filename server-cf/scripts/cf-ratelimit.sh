@@ -12,8 +12,8 @@ set -euo pipefail
 : "${CLOUDFLARE_API_TOKEN:?Set CLOUDFLARE_API_TOKEN (a token with Zone WAF: Edit)}"
 ZONE_NAME="${ZONE_NAME:-voltertest.xyz}"
 REQUESTS="${REQUESTS:-20}"     # requests allowed per period, per IP
-PERIOD="${PERIOD:-60}"          # seconds
-MITIGATION="${MITIGATION:-60}"  # block duration, seconds
+PERIOD="${PERIOD:-10}"      # seconds (free plan: 10)
+MITIGATION="${MITIGATION:-10}" # block duration, seconds (free plan: 10)
 API="https://api.cloudflare.com/client/v4"
 auth=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H "Content-Type: application/json")
 
