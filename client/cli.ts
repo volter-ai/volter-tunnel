@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * volter-tunnel CLI — the `bin`. Thin command layer over the SDK (createTunnel):
  * `login` proves a GitHub identity and saves an api token; the default form
@@ -8,8 +8,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createTunnel, DEFAULT_HOST, type TunnelLogger, type TunnelOptions, VolterClient } from './tunnel-client';
 import { formatUsage, formatWhoami } from './format';
+
+/** True when this file is the process entry (run as the bin), false when merely
+ *  imported (e.g. by tests). Portable across Bun and Node (import.meta.main is
+ *  only defined in Bun and Node ≥24). */
+function invokedDirectly(): boolean {
+  return !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+}
 
 /** Path of the saved api token from `volter-tunnel login`. */
 function tokenFilePath(): string {
@@ -142,7 +150,7 @@ export async function runAccount(
   return JSON.stringify(result, null, 2);
 }
 
-if (import.meta.main) {
+if (invokedDirectly()) {
   const args = process.argv.slice(2);
 
   function flag(name: string): string | undefined {

@@ -2,9 +2,14 @@
   "name": "@volter/tunnel",
   "version": "1.2.0",
   "description": "WebSocket HTTP/WS reverse tunnel client — embeddable library (createTunnel) + CLI + a typed relay SDK (VolterClient).",
-  "repository": { "type": "git", "url": "git+https://github.com/yueranyuan/volter-tunnel.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yueranyuan/volter-tunnel.git"
+  },
   "homepage": "https://github.com/yueranyuan/volter-tunnel#readme",
-  "bugs": { "url": "https://github.com/yueranyuan/volter-tunnel/issues" },
+  "bugs": {
+    "url": "https://github.com/yueranyuan/volter-tunnel/issues"
+  },
   "type": "module",
   "license": "Apache-2.0",
   "keywords": [
@@ -24,19 +29,31 @@
     "packages/*"
   ],
   "bin": {
-    "volter-tunnel": "./client/cli.ts"
+    "volter-tunnel": "./dist/cli.js"
   },
-  "main": "./client/tunnel-client.ts",
+  "main": "./dist/tunnel-client.js",
   "types": "./client/tunnel-client.ts",
   "exports": {
-    ".": "./client/tunnel-client.ts",
-    "./client": "./client/tunnel-client.ts"
+    ".": {
+      "bun": "./client/tunnel-client.ts",
+      "types": "./client/tunnel-client.ts",
+      "import": "./dist/tunnel-client.js"
+    },
+    "./client": {
+      "bun": "./client/tunnel-client.ts",
+      "types": "./client/tunnel-client.ts",
+      "import": "./dist/tunnel-client.js"
+    }
   },
   "files": [
+    "dist",
     "client",
     "README.md"
   ],
+  "publishConfig": { "access": "public" },
   "scripts": {
+    "build": "bun run --filter '@volter/tunnel-core' build && tsup client/tunnel-client.ts client/cli.ts --format esm --clean --out-dir dist && bun run --filter '@volter/tunnel-mcp' build",
+    "prepublishOnly": "tsup client/tunnel-client.ts client/cli.ts --format esm --clean --out-dir dist",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p packages/core/tsconfig.json && tsc --noEmit -p packages/mcp/tsconfig.json",
     "test": "bun test ./test && (cd packages/core && bun test) && (cd packages/mcp && bun test)",
     "test:cf": "cd server-cf && vitest run",
@@ -55,6 +72,7 @@
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.14",
     "jsonwebtoken": "^9.0.2",
+    "tsup": "^8.5.1",
     "typescript": "^5.0.0"
   },
   "optionalDependencies": {

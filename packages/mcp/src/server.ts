@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * volter-tunnel MCP server (stdio). Wires the SDK-backed tools onto an McpServer
  * so an AI agent can manage accounts, read usage, and act on abuse reports.

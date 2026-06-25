@@ -103,9 +103,8 @@ cd server-cf && npm install && npm run dev   # wrangler dev --local (real worker
 volter-tunnel --port 3000 --host http://127.0.0.1:8787 --auth-not-required
 ```
 
-> npm publishing isn't wired up yet — packages are consumed from source under
-> Bun today. See [docs/PUBLISHING.md](./docs/PUBLISHING.md) for the release
-> checklist.
+> Packages build to Node-consumable JS via `bun run build` and publish on a
+> version tag. See [docs/PUBLISHING.md](./docs/PUBLISHING.md).
 
 ## Develop
 
