@@ -32,9 +32,11 @@ All commands run from `server-cf/`.
 **Secrets** (`wrangler secret put <NAME>`):
 - `ROOT_TOKEN` — **required.** Admin credential (mint `vtr_…`, e.g.
   `openssl rand -hex 24` prefixed `vtr_`). Rotatable: re-put + redeploy.
-- `SIGNUP_ALLOWED_USERS` — **set this to enable allowlist mode** (comma-separated
-  GitHub logins). UNSET/EMPTY = **open** signup. Kept as a secret so it isn't
-  committed to a public repo.
+- `SIGNUP_ALLOWED_USERS` — comma-separated GitHub logins allowed to sign up.
+  Kept as a secret so it isn't committed to a public repo. **Signup fails CLOSED:**
+  if this is unset/empty, *nobody* can sign up unless `SIGNUP_OPEN=true` is also
+  set. So the three modes are: allowlist (this set), fully open (`SIGNUP_OPEN=true`,
+  no allowlist), or closed (neither — the safe default).
   **LAUNCH POLICY (DECISIONS D6): WAITLIST ONLY.** SET on the live worker (seeded
   with `yueranyuan`) → signup is closed to the public; only listed logins can
   self-provision, everyone else gets 403. To approve someone off the waitlist,
@@ -53,7 +55,7 @@ All commands run from `server-cf/`.
 
 ```bash
 cd server-cf
-npm run typecheck && npm test     # 89 tests should pass
+npm run typecheck && npm test     # all suites should pass
 npm run deploy                    # wrangler deploy
 ```
 

@@ -1,7 +1,7 @@
 # Tunnel metering & accounts
 
 Status: **implemented + deployed + proven live.** Code in `server-cf/`. Automated
-tests in `server-cf/test/metering.test.ts` (21 cases, real workerd). Proven
+tests in `server-cf/test/metering.test.ts` (real workerd, no mocks). Proven
 end-to-end over the internet against the deployed relay via
 `server-cf/proof-metering.ts` (account create → api token → real tunnel →
 exactly-N-then-429 cutoff with RateLimit-*/Retry-After headers → usage drained →
@@ -41,8 +41,10 @@ accounts and credentials.
 
 - **Limits — in dollars.** Every account has a **daily and monthly** cap, set in
   money via the admin API (`{ dayUsd, monthUsd }`, converted to op-credits) or as
-  raw op-credits, plus a `concurrentMax` and a `leaseChunk`. Defaults: **$10/day,
-  $100/month** (internal included). Usage is reported in both ops and dollars.
+  raw op-credits, plus a `concurrentMax` and a `leaseChunk`. The privileged
+  **internal** account defaults to **$10/day, $100/month**; **free signup**
+  accounts default to **$1/day, $10/month** (`SIGNUP_DAY/MONTH_LIMIT`). Usage is
+  reported in both ops and dollars.
 
   Message metering is **off the critical path** (counted per frame, charged in
   batches fire-and-forget) so it never adds latency to the relay; a chatty WS is

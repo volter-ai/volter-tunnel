@@ -1,7 +1,9 @@
 # volter-tunnel
 
-[![CI](https://github.com/volter-app/tunnel/actions/workflows/ci.yml/badge.svg)](./.github/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
+
+<!-- Add the CI badge once a GitHub remote exists:
+[![CI](https://github.com/<org>/<repo>/actions/workflows/ci.yml/badge.svg)](https://github.com/<org>/<repo>/actions/workflows/ci.yml) -->
 
 An open-source, WebSocket-based **HTTP/WS reverse tunnel** — an ngrok /
 Cloudflare-Tunnel alternative whose headline feature is a **free, stable,
@@ -90,6 +92,21 @@ server/          a legacy single-process Fly relay (same wire protocol).
 
 The protocol lives in `core` and nowhere else, so the client and relay can't
 drift — a change to the contract is type-checked on both sides.
+
+## Run a relay locally
+
+To try a tunnel end-to-end with no hosted account, run the relay locally and
+point the client at it:
+
+```bash
+cd server-cf && npm install && npm run dev   # wrangler dev --local (real workerd)
+# then, in another shell:
+volter-tunnel --port 3000 --host http://127.0.0.1:8787 --auth-not-required
+```
+
+> npm publishing isn't wired up yet — packages are consumed from source under
+> Bun today. See [docs/PUBLISHING.md](./docs/PUBLISHING.md) for the release
+> checklist.
 
 ## Develop
 

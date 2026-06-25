@@ -10,8 +10,7 @@ Last updated: 2026-06-24.
 
 ## Progress (branch `roadmap-buildout`)
 
-**Phase 0 and Phase 1 are complete.** Shipped, tested, committed — suite: 87 CF
-+ 10 root green:
+**Phase 0 and Phase 1 are complete.** Shipped, tested, committed — full suite green:
 
 - **#1** idle-reclaim of reserved tunnel IDs
 - **#2** GitHub signup — token exchange + gist proof, **no OAuth app** (DECISIONS D4)
@@ -33,7 +32,7 @@ Also done (Phase 2): **#10** inspector replay + persisted history
 
 **Deployed to production** (`volter-tunnel.relay.internal.example` +
 `*.voltertest.xyz`), allowlist signup live, security review done + hardened
-(see SECURITY.md). 91 CF + 10 root tests green.
+(see SECURITY.md). Full suite green.
 
 Status of the rest:
 - **#11 bandwidth tiers / #14 concurrent tiers — DONE by configuration.** No code

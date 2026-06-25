@@ -1,6 +1,6 @@
 # @volter/tunnel-core
 
-The shared **wire-protocol contract** for [volter-tunnel](../../README.md): the
+The shared **wire-protocol contract** for volter-tunnel: the
 control-channel message types, a frame codec, and the DTOs that cross the wire.
 
 Pure, dependency-free, and runtime-agnostic — imported by **both** the client and
@@ -37,4 +37,4 @@ const msg = decodeFrame(raw); // ControlMessage | null (null on junk/unknown typ
 cd packages/core && bun test   # runs the 100% coverage gate (bunfig.toml)
 ```
 
-Licensed [Apache-2.0](../../LICENSE).
+Licensed under Apache-2.0.

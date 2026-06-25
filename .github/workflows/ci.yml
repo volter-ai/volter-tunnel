@@ -41,7 +41,7 @@ jobs:
         with:
           node-version: 22
       - run: bun install --frozen-lockfile
-      - name: Install relay deps
-        run: cd server-cf && npm install
+      - name: Install relay deps (frozen)
+        run: cd server-cf && bun install --frozen-lockfile
       - name: Relay tests (real workerd, no mocks)
-        run: cd server-cf && npx vitest run
+        run: cd server-cf && bunx vitest run
