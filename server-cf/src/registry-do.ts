@@ -301,7 +301,8 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       const who = await this.resolveAccountToken(request);
       if (!who) return json({ error: 'unauthorized' }, 401);
       const dir = this.accounts.get(who.slug);
-      return json({ slug: who.slug, name: dir?.name, usage: await this.accountUsage(who.slug) });
+      if (!dir || dir.status !== 'active') return json({ error: 'account suspended' }, 403);
+      return json({ slug: who.slug, name: dir.name, usage: await this.accountUsage(who.slug) });
     }
 
     // Fleet usage summary (root): every account's live usage + dollars in one call.
@@ -441,13 +442,14 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
    *  a set allowlist restricts to those logins (case-insensitive). Gates account
    *  creation only — existing secrets/tokens are unaffected. */
   private signupAllowed(login: string): boolean {
-    const raw = this.env.SIGNUP_ALLOWED_USERS;
-    if (!raw || !raw.trim()) return true;
-    const allow = raw
+    const allow = (this.env.SIGNUP_ALLOWED_USERS ?? '')
       .split(',')
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean);
-    return allow.includes(login.toLowerCase());
+    if (allow.length) return allow.includes(login.toLowerCase());
+    // No allowlist configured → fail CLOSED. Open signup requires an explicit
+    // opt-in, so a missing/cleared secret can never silently become an open door.
+    return this.env.SIGNUP_OPEN === 'true' || this.env.SIGNUP_OPEN === '1';
   }
 
   /** Resolve a verified GitHub identity to an account + a fresh CLI api token.
@@ -482,13 +484,18 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
   }
 
   // ── gist-proof signup: prove GitHub ownership without sending us any token ─────
-  private nonceSecret(): string {
-    return this.env.SIGNUP_NONCE_SECRET || this.env.ROOT_TOKEN || 'volter-signup';
+  /** The HMAC key for gist nonces. Prefers a dedicated secret, else the root
+   *  token; returns null if neither is set (never a hardcoded fallback — a known
+   *  key would let anyone forge a valid nonce+verifier offline). */
+  private nonceSecret(): string | null {
+    return this.env.SIGNUP_NONCE_SECRET || this.env.ROOT_TOKEN || null;
   }
   private async hmacHex(input: string): Promise<string> {
+    const secret = this.nonceSecret();
+    if (!secret) throw new Error('signup nonce secret not configured');
     const key = await crypto.subtle.importKey(
       'raw',
-      new TextEncoder().encode(this.nonceSecret()),
+      new TextEncoder().encode(secret),
       { name: 'HMAC', hash: 'SHA-256' },
       false,
       ['sign']
@@ -501,6 +508,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
    *  caller and is NOT in the gist, so a third party who merely sees the public
    *  gist cannot complete signup as its owner (binds /verify to whoever /started). */
   private async gistStart(): Promise<Response> {
+    if (!this.nonceSecret()) return json({ error: 'gist signup not configured' }, 503);
     const payload = `${randomBase62(24)}.${Date.now() + 10 * 60_000}`;
     const nonce = `volter-verify-${payload}.${await this.hmacHex(payload)}`;
     const verifier = await this.hmacHex(`v:${payload}`);
@@ -522,6 +530,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     return Number.isFinite(exp) && Date.now() < exp ? payload! : null;
   }
   private async gistVerify(body: Record<string, unknown>): Promise<Response> {
+    if (!this.nonceSecret()) return json({ error: 'gist signup not configured' }, 503);
     const gistId = String(body.gistId ?? '');
     const verifier = String(body.verifier ?? '');
     if (!gistId || !verifier) return json({ error: 'missing gistId or verifier' }, 400);
