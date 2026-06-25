@@ -6,6 +6,13 @@
 /** HTTP header bag as carried over the protocol (Node-style multi-value). */
 export type HeaderMap = Record<string, string | string[] | undefined>;
 
+/**
+ * Opaque correlation id for an in-flight request or relayed WebSocket. The
+ * Cloudflare relay uses UUID strings; the Fly relay uses numeric counters.
+ * Clients treat it opaquely (map key + echo back), so the wire type is the union.
+ */
+export type CorrelationId = string | number;
+
 /** Usage pressure for an account, derived from its day/month windows. */
 export type UsageLevel = 'ok' | 'warn' | 'exceeded';
 

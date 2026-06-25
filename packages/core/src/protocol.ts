@@ -4,7 +4,7 @@
  * relay. Both the client and the relay import these types; a change here is a
  * change to the contract, type-checked on both sides.
  */
-import type { AccountSnapshot, HeaderMap, RateWindow, UsageLevel } from './dto';
+import type { AccountSnapshot, CorrelationId, HeaderMap, RateWindow, UsageLevel } from './dto';
 
 // ── client → relay ────────────────────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ export interface RegisterMsg {
 /** A complete (buffered) response — used for relay-visible errors like 502. */
 export interface ResponseMsg {
   type: 'response';
-  reqId: number;
+  reqId: CorrelationId;
   status: number;
   headers: HeaderMap;
   /** base64-encoded body. */
@@ -36,7 +36,7 @@ export interface ResponseMsg {
 /** Start of a streamed response (status + headers, body follows in chunks). */
 export interface ResponseStartMsg {
   type: 'response-start';
-  reqId: number;
+  reqId: CorrelationId;
   status: number;
   headers: HeaderMap;
 }
@@ -44,7 +44,7 @@ export interface ResponseStartMsg {
 /** One streamed response body chunk. */
 export interface ResponseChunkMsg {
   type: 'response-chunk';
-  reqId: number;
+  reqId: CorrelationId;
   /** base64-encoded chunk. */
   data: string;
 }
@@ -52,19 +52,19 @@ export interface ResponseChunkMsg {
 /** End of a streamed response. */
 export interface ResponseEndMsg {
   type: 'response-end';
-  reqId: number;
+  reqId: CorrelationId;
 }
 
 /** The client connected to the local WebSocket and is ready to relay frames. */
 export interface WsReadyMsg {
   type: 'ws-ready';
-  connId: number;
+  connId: CorrelationId;
 }
 
 /** The client failed to establish/maintain the local WebSocket. */
 export interface WsErrorMsg {
   type: 'ws-error';
-  connId: number;
+  connId: CorrelationId;
   error: string;
 }
 
@@ -82,7 +82,7 @@ export interface RegisteredMsg {
 /** An inbound HTTP request to forward to the local server. */
 export interface RequestMsg {
   type: 'request';
-  reqId: number;
+  reqId: CorrelationId;
   method: string;
   path: string;
   headers: HeaderMap;
@@ -93,13 +93,13 @@ export interface RequestMsg {
 /** The relay asks the client to abort an in-flight request. */
 export interface RequestAbortMsg {
   type: 'request-abort';
-  reqId: number;
+  reqId: CorrelationId;
 }
 
 /** An inbound browser WebSocket upgrade to bridge to the local server. */
 export interface WsUpgradeMsg {
   type: 'ws-upgrade';
-  connId: number;
+  connId: CorrelationId;
   path: string;
   headers: HeaderMap;
 }
@@ -123,7 +123,7 @@ export interface ErrorMsg {
 /** A WebSocket data frame relayed in either direction. */
 export interface WsMessageMsg {
   type: 'ws-message';
-  connId: number;
+  connId: CorrelationId;
   /** base64-encoded frame payload. */
   data: string;
   binary: boolean;
@@ -132,7 +132,7 @@ export interface WsMessageMsg {
 /** A WebSocket close relayed in either direction. */
 export interface WsCloseMsg {
   type: 'ws-close';
-  connId: number;
+  connId: CorrelationId;
   code?: number;
   reason?: string;
 }
