@@ -1,0 +1,5 @@
+# Pure logic with no I/O — held to 100% coverage. The gate fails the build if it
+# ever regresses, so the protocol contract stays fully exercised.
+[test]
+coverage = true
+coverageThreshold = 1.0
