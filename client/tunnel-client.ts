@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
-import type { RelayToClient, RequestMsg, WsUpgradeMsg } from '@volter/tunnel-core';
+import type { CorrelationId, RelayToClient, RequestMsg, WsUpgradeMsg } from '@volter/tunnel-core';
 
 /** Default relay (Cloudflare Workers + Durable Objects). */
 const DEFAULT_HOST = 'https://volter-tunnel.aaron-0ed.workers.dev';
@@ -274,9 +274,9 @@ export function createTunnel({
     let stableTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Track local WebSocket connections: connId → WebSocket
-    const localWsConnections = new Map<number, WebSocket>();
+    const localWsConnections = new Map<CorrelationId, WebSocket>();
     // Track active HTTP requests for abort support: reqId → http.ClientRequest
-    const activeRequests = new Map<number, http.ClientRequest>();
+    const activeRequests = new Map<CorrelationId, http.ClientRequest>();
 
     const timeout = setTimeout(() => {
       ws.close();
@@ -548,7 +548,7 @@ function handleWsUpgrade(
   localAddr: string,
   controlWs: WebSocket,
   msg: WsUpgradeMsg,
-  localWsConnections: Map<number, WebSocket>,
+  localWsConnections: Map<CorrelationId, WebSocket>,
   log: TunnelLogger
 ): void {
   const wsHost = localAddr.includes(':') ? `[${localAddr}]` : localAddr;
@@ -683,7 +683,7 @@ function handleWsUpgrade(
   });
 }
 
-function send502(ws: WebSocket, reqId: number, message: string): void {
+function send502(ws: WebSocket, reqId: CorrelationId, message: string): void {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(
       JSON.stringify({
@@ -706,7 +706,7 @@ function forwardRequest(
   localAddr: string,
   msg: RequestMsg,
   ws: WebSocket,
-  activeRequests: Map<number, http.ClientRequest>,
+  activeRequests: Map<CorrelationId, http.ClientRequest>,
   onConnRefused?: (err: NodeJS.ErrnoException) => Promise<boolean>
 ): http.ClientRequest {
   const headers: Record<string, string | string[] | undefined> = { ...msg.headers };

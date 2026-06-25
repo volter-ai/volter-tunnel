@@ -39,6 +39,10 @@ const samples: ControlMessage[] = [
   },
   { type: 'request', reqId: 3, method: 'GET', path: '/', headers: { host: 'x' }, body: null },
   { type: 'request-abort', reqId: 3 },
+  // CorrelationId is a union: the Cloudflare relay uses UUID strings.
+  { type: 'request', reqId: 'a1b2-uuid', method: 'POST', path: '/x', headers: {}, body: 'AAAA' },
+  { type: 'response-end', reqId: 'a1b2-uuid' },
+  { type: 'ws-message', connId: 'c-uuid', data: 'AAAA', binary: true },
   { type: 'ws-upgrade', connId: 8, path: '/socket', headers: { 'sec-websocket-protocol': 'vite-hmr' } },
   {
     type: 'quota',

@@ -28,6 +28,7 @@ import {
 import { CREDIT_WEIGHTS, hashToken, parseToken, type UsageDelta } from './credits';
 import { burstStep, envNum, reservationDecision } from './metering-types';
 import type { AuthorizeResult, BurstState, LeaseResult, RateSnapshot, Reservation } from './metering-types';
+import { sendFrame } from './protocol';
 
 interface CtlAttach {
   role: 'ctl';
@@ -278,7 +279,7 @@ export class TunnelDO extends DurableObject<Env> {
       const ctl = this.ctl();
       if (ctl) {
         try {
-          ctl.send(JSON.stringify({ type: 'quota', level: rate.level, day: rate.day, month: rate.month }));
+          sendFrame(ctl, { type: 'quota', level: rate.level, day: rate.day, month: rate.month });
         } catch {
           /* control gone */
         }
@@ -645,16 +646,14 @@ export class TunnelDO extends DurableObject<Env> {
       }, 30000);
       this.pendingHttp.set(reqId, { resolve, timer, request, bootstrapCookie, rate: rateHeaders });
       try {
-        ctl.send(
-          JSON.stringify({
-            type: 'request',
-            reqId,
-            method: request.method,
-            path: forwardPath,
-            headers: forwardHeaders,
-            body: bodyBytes && bodyBytes.length ? b64encode(bodyBytes) : null,
-          })
-        );
+        sendFrame(ctl, {
+          type: 'request',
+          reqId,
+          method: request.method,
+          path: forwardPath,
+          headers: forwardHeaders,
+          body: bodyBytes && bodyBytes.length ? b64encode(bodyBytes) : null,
+        });
       } catch {
         clearTimeout(timer);
         this.pendingHttp.delete(reqId);
@@ -706,7 +705,7 @@ export class TunnelDO extends DurableObject<Env> {
       }, 15000);
       this.pendingUpgrades.set(connId, { resolve, reject, timer });
     });
-    ctl.send(JSON.stringify({ type: 'ws-upgrade', connId, path: cleanPath, headers: forwardHeaders }));
+    sendFrame(ctl, { type: 'ws-upgrade', connId, path: cleanPath, headers: forwardHeaders });
     try {
       await ready;
     } catch {
@@ -754,7 +753,7 @@ export class TunnelDO extends DurableObject<Env> {
         return;
       }
       try {
-        ctl.send(JSON.stringify({ type: 'ws-message', connId: attach.connId, data: b64encode(bytes), binary }));
+        sendFrame(ctl, { type: 'ws-message', connId: attach.connId, data: b64encode(bytes), binary });
       } catch {
         try {
           ws.close(1011, 'relay error');
@@ -785,7 +784,7 @@ export class TunnelDO extends DurableObject<Env> {
       const ctl = this.ctl();
       if (ctl) {
         try {
-          ctl.send(JSON.stringify({ type: 'ws-close', connId: attach.connId }));
+          sendFrame(ctl, { type: 'ws-close', connId: attach.connId });
         } catch {
           /* control gone */
         }
@@ -878,7 +877,7 @@ export class TunnelDO extends DurableObject<Env> {
       const ctl = this.ctl();
       if (ctl) {
         try {
-          ctl.send(JSON.stringify({ type: 'request-abort', reqId }));
+          sendFrame(ctl, { type: 'request-abort', reqId });
         } catch {
           /* control gone */
         }
@@ -914,7 +913,7 @@ export class TunnelDO extends DurableObject<Env> {
         slug = internal;
         legacy = true;
       } else {
-        ws.send(JSON.stringify({ type: 'error', message: 'Invalid tunnel secret' }));
+        sendFrame(ws, { type: 'error', message: 'Invalid tunnel secret' });
         ws.close(4003, 'Invalid tunnel secret');
         return;
       }
@@ -929,12 +928,10 @@ export class TunnelDO extends DurableObject<Env> {
       const reservation = await this.ctx.storage.get<Reservation>('reservation');
       const verdict = reservationDecision(reservation, slug, Date.now(), ttlMs);
       if (verdict === 'reject') {
-        ws.send(
-          JSON.stringify({
-            type: 'error',
-            message: `Tunnel ID '${String(msg.tunnelId ?? '')}' is reserved by another account.`,
-          })
-        );
+        sendFrame(ws, {
+          type: 'error',
+          message: `Tunnel ID '${String(msg.tunnelId ?? '')}' is reserved by another account.`,
+        });
         ws.close(4002, 'Tunnel ID reserved');
         return;
       }
@@ -946,12 +943,10 @@ export class TunnelDO extends DurableObject<Env> {
         if (msg.replace) {
           for (const w of others) (w as WebSocket).close(4001, 'Replaced by new client');
         } else {
-          ws.send(
-            JSON.stringify({
-              type: 'error',
-              message: `Tunnel ID '${msg.tunnelId}' is already in use by another client. Pass { replace: true } to take over.`,
-            })
-          );
+          sendFrame(ws, {
+            type: 'error',
+            message: `Tunnel ID '${msg.tunnelId}' is already in use by another client. Pass { replace: true } to take over.`,
+          });
           ws.close(4002, 'Tunnel ID already in use');
           return;
         }
@@ -979,7 +974,7 @@ export class TunnelDO extends DurableObject<Env> {
       if (!auth || !auth.ok) {
         const reason = auth?.reason ?? 'account unavailable';
         const code = reason === 'badToken' ? 4003 : 4029;
-        ws.send(JSON.stringify({ type: 'error', message: `Tunnel rejected: ${reason}` }));
+        sendFrame(ws, { type: 'error', message: `Tunnel rejected: ${reason}` });
         ws.close(code, reason);
         return;
       }
@@ -1021,14 +1016,12 @@ export class TunnelDO extends DurableObject<Env> {
       this.rate = auth.rate ?? null;
       this.lastQuotaLevel = auth.rate?.level ?? null;
       const url = `https://${tunnelId}.${this.env.TUNNEL_DOMAIN}`;
-      ws.send(
-        JSON.stringify({
-          type: 'registered',
-          tunnelId,
-          url,
-          account: auth.rate ? { slug, day: auth.rate.day, month: auth.rate.month, level: auth.rate.level } : undefined,
-        })
-      );
+      sendFrame(ws, {
+        type: 'registered',
+        tunnelId,
+        url,
+        account: auth.rate ? { slug, day: auth.rate.day, month: auth.rate.month, level: auth.rate.level } : undefined,
+      });
       return;
     }
 
@@ -1087,7 +1080,7 @@ export class TunnelDO extends DurableObject<Env> {
           const ctl = self.ctl();
           if (ctl) {
             try {
-              ctl.send(JSON.stringify({ type: 'request-abort', reqId }));
+              sendFrame(ctl, { type: 'request-abort', reqId });
             } catch {
               /* control gone */
             }
