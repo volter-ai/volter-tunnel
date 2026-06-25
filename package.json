@@ -26,8 +26,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p packages/core/tsconfig.json && tsc --noEmit -p packages/mcp/tsconfig.json",
     "test": "bun test ./test ./packages/core/test",
     "test:cf": "cd server-cf && vitest run",
-    "lint": "biome check client packages",
-    "format": "biome format --write client packages",
+    "lint": "biome check client packages server-cf/src",
+    "format": "biome format --write client packages server-cf/src",
     "tunnel": "bun run client/tunnel-client.ts",
     "server": "node server/server.mjs"
   },

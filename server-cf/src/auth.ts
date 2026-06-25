@@ -286,11 +286,7 @@ export function cookieFor(token: string, cookieDomain: string): string {
 }
 
 /** GET /__volter_auth?__volter_token=<jwt> → set the cross-iframe auth cookie. */
-export async function handleCookieBootstrap(
-  request: Request,
-  url: URL,
-  env: Env
-): Promise<Response> {
+export async function handleCookieBootstrap(request: Request, url: URL, env: Env): Promise<Response> {
   const cors = corsHeaders(request);
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: cors });
