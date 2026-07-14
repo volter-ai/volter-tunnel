@@ -4,7 +4,7 @@
  * set/remove rule list. Pure — no Worker needed.
  */
 import { describe, expect, test } from 'vitest';
-import { buildResponseHeaders, parseHeaderRules } from '../src/auth';
+import { buildResponseHeaders, corsHeaders, parseHeaderRules } from '../src/auth';
 
 const req = (origin?: string) =>
   new Request('https://app.tunnel.test/', origin ? { headers: { origin } } : undefined);
@@ -74,5 +74,32 @@ describe('parseHeaderRules — tolerant parsing', () => {
       set: { 'x-a': '1' },
       remove: ['x-c'],
     });
+  });
+});
+
+describe('corsHeaders — preflight allow-headers reflection', () => {
+  const preflight = (requested?: string) =>
+    new Request('https://app.tunnel.test/', {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://runhuman.example',
+        ...(requested ? { 'access-control-request-headers': requested } : {}),
+      },
+    });
+
+  test('reflects Access-Control-Request-Headers verbatim (custom app headers pass preflight)', () => {
+    const h = corsHeaders(preflight('content-type, authorization, x-active-tenant-id'));
+    expect(h['access-control-allow-headers']).toBe('content-type, authorization, x-active-tenant-id');
+    expect(h['access-control-allow-origin']).toBe('https://runhuman.example');
+    expect(h['access-control-allow-credentials']).toBe('true');
+  });
+
+  test('falls back to the fixed list when no request-headers hint is present', () => {
+    const h = corsHeaders(preflight());
+    expect(h['access-control-allow-headers']).toBe('Content-Type, Authorization, X-Sandbox-Id');
+  });
+
+  test('no origin → no CORS headers at all', () => {
+    expect(corsHeaders(new Request('https://app.tunnel.test/'))).toEqual({});
   });
 });

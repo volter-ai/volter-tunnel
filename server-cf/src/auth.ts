@@ -178,14 +178,24 @@ export function stripAuthCookie(headers: Record<string, string>): Record<string,
   return result;
 }
 
-/** CORS headers for a tunneled response (all tunnel traffic is cross-origin). */
+/** CORS headers for a tunneled response (all tunnel traffic is cross-origin).
+ *
+ *  The relay answers preflight itself (it never forwards OPTIONS to the
+ *  origin app), so the allow-headers grant must cover whatever custom headers
+ *  the tunneled app's clients send — which the relay cannot know in advance.
+ *  Reflect the browser's Access-Control-Request-Headers verbatim: the browser
+ *  lists exactly the headers the real request will carry, and a wildcard is
+ *  not an option because allow-credentials is true (spec ignores `*` there).
+ *  The fixed list remains as a fallback for non-preflight responses, which
+ *  carry no request-headers hint. */
 export function corsHeaders(request: Request): Record<string, string> {
   const origin = request.headers.get('origin');
   if (!origin) return {};
+  const requested = request.headers.get('access-control-request-headers');
   return {
     'access-control-allow-origin': origin,
     'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-    'access-control-allow-headers': 'Content-Type, Authorization, X-Sandbox-Id',
+    'access-control-allow-headers': requested || 'Content-Type, Authorization, X-Sandbox-Id',
     'access-control-allow-credentials': 'true',
   };
 }
