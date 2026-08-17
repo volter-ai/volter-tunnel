@@ -2,15 +2,20 @@
 
 All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Packages version
-independently: `@volter/tunnel` continues its line (→ **2.0.1**), while
+independently: `@volter/tunnel` continues its line (→ **2.0.2**), while
 `@volter/tunnel-core` and `@volter/tunnel-mcp` are new at **0.1.0**.
 
-## @volter/tunnel 2.0.1
+## @volter/tunnel 2.0.2
 
 ### Security
 
 - Successful `volter-tunnel login` now confirms that the owner-only local
   credential was saved without printing the credential to stdout.
+
+### Fixed
+
+- Published metadata now uses the concrete `@volter/tunnel-core` version so
+  npm consumers never receive an unresolved workspace protocol.
 
 ## @volter/tunnel 2.0.0 — @volter/tunnel-core 0.1.0 — @volter/tunnel-mcp 0.1.0
 
