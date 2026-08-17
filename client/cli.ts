@@ -77,7 +77,7 @@ async function runLogin(opts: { host: string; method: 'token' | 'gist'; token?: 
   fs.writeFileSync(file, String(resp.token), { mode: 0o600 });
   console.error(`Logged in as github:${resp.login} (account ${resp.slug}).`);
   console.error(`Saved api token to ${file} — future 'volter-tunnel' runs use it automatically.`);
-  console.log(String(resp.token)); // stdout = the token (scriptable)
+  console.error('Login complete. The credential was saved locally and will not be printed.');
 }
 
 /** A compact, copy-friendly connection banner for the CLI. Written to stderr so
