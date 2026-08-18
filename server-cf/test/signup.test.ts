@@ -273,7 +273,7 @@ describe('self-service /me (api token reads its own account + usage)', () => {
       authorization: `Bearer ${ownerToken}`,
     });
     expect(revoked.status).toBe(200);
-    expect((await rawRegister(port, 'restorable-host', hostToken)).ok).toBe(false);
+    expect((await get(port, '/me', { authorization: `Bearer ${hostToken}` })).status).toBe(401);
 
     const restored = await post(
       port,
@@ -285,7 +285,7 @@ describe('self-service /me (api token reads its own account + usage)', () => {
     );
     expect(restored.status).toBe(200);
     expect(restored.json.restored).toBe(true);
-    expect((await rawRegister(port, 'restorable-host', hostToken)).ok).toBe(true);
+    expect((await rawRegister(port, 'restored-host', hostToken)).ok).toBe(true);
   }, 30000);
 });
 
