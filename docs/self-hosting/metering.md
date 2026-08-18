@@ -136,6 +136,8 @@ An api token also has owner-scoped recovery endpoints under `/me`: `GET
 /me/tokens` returns safe metadata, `DELETE /me/tokens/:id` revokes a selected
 device, and `POST /me/tokens/:id/restore` deliberately restores it. GitHub login
 mints an independent device token and never implicitly revokes another device.
+For a contested reserved tunnel id, the newest active device credential is the
+fenced owner; an older credential cannot evict it through reconnect attempts.
 
 ## Configuration (wrangler vars / secrets)
 

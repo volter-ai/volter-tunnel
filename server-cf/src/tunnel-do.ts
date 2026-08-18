@@ -26,7 +26,14 @@ import {
 } from './auth';
 import { CREDIT_WEIGHTS, hashToken, parseToken, type UsageDelta } from './credits';
 import { burstStep, envNum, reservationDecision } from './metering-types';
-import type { AuthorizeResult, BurstState, LeaseResult, RateSnapshot, Reservation } from './metering-types';
+import type {
+  AuthorizeResult,
+  BurstState,
+  DeviceCredentialResult,
+  LeaseResult,
+  RateSnapshot,
+  Reservation,
+} from './metering-types';
 import { sendFrame } from './protocol';
 
 interface CtlAttach {
@@ -46,6 +53,10 @@ interface CtlAttach {
   /** Re-authorize inputs (so a reaped-but-live tunnel can re-register its entry). */
   legacy?: boolean;
   tokenHash?: string;
+  /** Active device credential that won this reserved-id lease. Newer
+   * credentials may replace it; older credentials may not evict it. */
+  credentialCreatedAt?: string;
+  credentialId?: string;
   /** SHA-256 of "user:pass" when the tunnel is gated by HTTP Basic Auth (#6). */
   basicAuthHash?: string;
 }
@@ -260,6 +271,19 @@ export class TunnelDO extends DurableObject<Env> {
     if (!stub) return null;
     try {
       const res = await stub.fetch(`https://account${path}`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      return (await res.json()) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  private async registryRpc<T>(path: string, payload: Record<string, unknown>): Promise<T | null> {
+    try {
+      const stub = this.env.REGISTRY.get(this.env.REGISTRY.idFromName('registry'));
+      const res = await stub.fetch(`https://registry${path}`, {
         method: 'POST',
         body: JSON.stringify(payload),
       });
@@ -939,11 +963,43 @@ export class TunnelDO extends DurableObject<Env> {
         return;
       }
 
+      const credential = legacy
+        ? undefined
+        : await this.registryRpc<DeviceCredentialResult>('/resolve-device-credential', { slug, tokenHash });
+      if (!legacy && credential?.ok !== true) {
+        sendFrame(ws, { type: 'error', fatal: true, message: 'Tunnel rejected: credential is invalid or revoked.' });
+        ws.close(4003, 'Invalid tunnel secret');
+        return;
+      }
+
       const others = this.ctx
         .getWebSockets('ctl')
         .filter((w) => w !== ws && (w.deserializeAttachment() as CtlAttach | null)?.registered);
       if (others.length) {
         if (msg.replace) {
+          const incomingRank = credential?.ok === true ? `${credential.createdAt}\u0000${credential.id}` : undefined;
+          const newerOwner =
+            incomingRank === undefined
+              ? undefined
+              : others.find((candidate) => {
+                  const attached = candidate.deserializeAttachment() as CtlAttach | null;
+                  if (
+                    attached?.credentialId === undefined ||
+                    attached.credentialCreatedAt === undefined ||
+                    attached.credentialId === credential.id
+                  )
+                    return false;
+                  return `${attached.credentialCreatedAt}\u0000${attached.credentialId}` > incomingRank;
+                });
+          if (newerOwner !== undefined) {
+            sendFrame(ws, {
+              type: 'error',
+              fatal: true,
+              message: `Tunnel ID '${String(msg.tunnelId ?? '')}' is active on a newer authenticated device. Stop that connector or revoke its device token before taking over.`,
+            });
+            ws.close(4002, 'Newer device owns tunnel');
+            return;
+          }
           for (const w of others) (w as WebSocket).close(4001, 'Replaced by new client');
         } else {
           sendFrame(ws, {
@@ -1016,6 +1072,7 @@ export class TunnelDO extends DurableObject<Env> {
         regId,
         legacy,
         tokenHash,
+        ...(credential?.ok === true ? { credentialCreatedAt: credential.createdAt, credentialId: credential.id } : {}),
         basicAuthHash,
       } satisfies CtlAttach);
       // Seed the rate snapshot + quota level so headers work from the first

@@ -261,6 +261,13 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     const url = new URL(request.url);
     const parts = url.pathname.split('/').filter(Boolean); // e.g. ['admin','accounts','slug','tokens']
 
+    // Internal DO-to-DO lookup only. The apex Worker does not route this path,
+    // so token hashes never become part of the public management API.
+    if (url.pathname === '/resolve-device-credential') {
+      if (request.method !== 'POST') return json({ ok: false }, 405);
+      return json(this.resolveDeviceCredential((await request.json().catch(() => ({}))) as Record<string, unknown>));
+    }
+
     // Internal, unauthenticated (DO-to-DO only): the internal account reserving
     // its allocation against the global budget at self-bootstrap.
     if (url.pathname === '/reserve-internal') {
@@ -445,6 +452,22 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     } catch (e) {
       return json({ error: e instanceof Error ? e.message : 'error' }, 400);
     }
+  }
+
+  private resolveDeviceCredential(
+    body: Record<string, unknown>
+  ): { ok: true; id: string; createdAt: string } | { ok: false } {
+    const slug = String(body.slug ?? '');
+    const hash = String(body.tokenHash ?? '');
+    if (!this.accounts.has(slug) || hash.length === 0) return { ok: false };
+    const token = [...this.tokens.values()].find(
+      (candidate) =>
+        candidate.slug === slug &&
+        candidate.kind === 'api' &&
+        candidate.revokedAt === null &&
+        safeEqualHex(candidate.hash, hash)
+    );
+    return token === undefined ? { ok: false } : { createdAt: token.createdAt, id: token.id, ok: true };
   }
 
   // ── signup (#2) ────────────────────────────────────────────────────────────────

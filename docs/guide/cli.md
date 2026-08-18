@@ -42,7 +42,9 @@ volter-tunnel login --host https://your-relay --gist   # gist proof, sends the r
 
 The saved token lives at `~/.config/volter/token` (mode `600`). Logging in on a
 second device creates an independent token; it does not revoke credentials used
-by persistent hosts. Use `tokens` and `token revoke` to retire old devices.
+by persistent hosts. When two devices claim the same tunnel id with replacement
+enabled, the newest active credential owns it and stale clients stop retrying.
+Use `tokens` and `token revoke` to retire old devices.
 
 ## Self-service & admin
 

@@ -2,8 +2,21 @@
 
 All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Packages version
-independently: `@volter/tunnel` continues its line (→ **2.0.4**), while
-`@volter/tunnel-core` and `@volter/tunnel-mcp` continue at **0.1.2**.
+independently: `@volter/tunnel` continues its line (→ **2.0.5**), while
+`@volter/tunnel-core` and `@volter/tunnel-mcp` continue at **0.1.3**.
+
+## @volter/tunnel 2.0.5 — @volter/tunnel-core 0.1.3 — @volter/tunnel-mcp 0.1.3
+
+### Security
+
+- A reserved tunnel id is fenced to its newest active device credential. A
+  stale connector can no longer repeatedly evict the current host when both
+  were configured with replacement enabled.
+
+### Changed
+
+- The relay marks a stale-device rejection as fatal, and current clients stop
+  reconnecting until the operator restores or replaces their credential.
 
 ## @volter/tunnel 2.0.4 — @volter/tunnel-core 0.1.2 — @volter/tunnel-mcp 0.1.2
 

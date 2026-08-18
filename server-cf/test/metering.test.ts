@@ -206,8 +206,8 @@ beforeAll(async () => {
     concurrentMax: 2,
   });
   acmeService = acme.json.serviceToken as string;
-  acmeApi = (await admin(port, 'POST', '/admin/accounts/acme/tokens', acmeService, { kind: 'api', label: 't' }))
-    .json.token as string;
+  acmeApi = (await admin(port, 'POST', '/admin/accounts/acme/tokens', acmeService, { kind: 'api', label: 't' })).json
+    .token as string;
 
   // cap: roomy daily cap, concurrentMax 2 for the concurrency test.
   const cap = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
@@ -219,8 +219,8 @@ beforeAll(async () => {
     concurrentMax: 2,
   });
   capService = cap.json.serviceToken as string;
-  capApi = (await admin(port, 'POST', '/admin/accounts/cap/tokens', capService, { kind: 'api', label: 't' }))
-    .json.token as string;
+  capApi = (await admin(port, 'POST', '/admin/accounts/cap/tokens', capService, { kind: 'api', label: 't' })).json
+    .token as string;
 
   // hdr: roomy account for asserting RateLimit-* headers on a 200.
   const hdr = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
@@ -231,9 +231,11 @@ beforeAll(async () => {
     leaseChunk: 10,
     concurrentMax: 5,
   });
-  hdrApi = (await admin(port, 'POST', '/admin/accounts/hdr/tokens', hdr.json.serviceToken as string, {
-    kind: 'api',
-  })).json.token as string;
+  hdrApi = (
+    await admin(port, 'POST', '/admin/accounts/hdr/tokens', hdr.json.serviceToken as string, {
+      kind: 'api',
+    })
+  ).json.token as string;
 
   // push: tiny daily cap so usage crosses warn(≥80%) then exceeded for the
   // control-plane quota-push test.
@@ -245,9 +247,11 @@ beforeAll(async () => {
     leaseChunk: 1,
     concurrentMax: 5,
   });
-  pushApi = (await admin(port, 'POST', '/admin/accounts/push/tokens', push.json.serviceToken as string, {
-    kind: 'api',
-  })).json.token as string;
+  pushApi = (
+    await admin(port, 'POST', '/admin/accounts/push/tokens', push.json.serviceToken as string, {
+      kind: 'api',
+    })
+  ).json.token as string;
 
   // mon: roomy daily cap but a tiny MONTHLY cap, so the month binds first.
   const mon = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
@@ -258,9 +262,11 @@ beforeAll(async () => {
     leaseChunk: 1,
     concurrentMax: 5,
   });
-  monApi = (await admin(port, 'POST', '/admin/accounts/mon/tokens', mon.json.serviceToken as string, {
-    kind: 'api',
-  })).json.token as string;
+  monApi = (
+    await admin(port, 'POST', '/admin/accounts/mon/tokens', mon.json.serviceToken as string, {
+      kind: 'api',
+    })
+  ).json.token as string;
 
   // shared: one daily pool of 4 credits shared across multiple tunnels.
   const shared = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
@@ -271,9 +277,11 @@ beforeAll(async () => {
     leaseChunk: 1,
     concurrentMax: 5,
   });
-  sharedApi = (await admin(port, 'POST', '/admin/accounts/shared/tokens', shared.json.serviceToken as string, {
-    kind: 'api',
-  })).json.token as string;
+  sharedApi = (
+    await admin(port, 'POST', '/admin/accounts/shared/tokens', shared.json.serviceToken as string, {
+      kind: 'api',
+    })
+  ).json.token as string;
 
   // rev: for the token-revocation test.
   const rev = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
@@ -285,8 +293,7 @@ beforeAll(async () => {
     concurrentMax: 5,
   });
   revService = rev.json.serviceToken as string;
-  revApi = (await admin(port, 'POST', '/admin/accounts/rev/tokens', revService, { kind: 'api' })).json
-    .token as string;
+  revApi = (await admin(port, 'POST', '/admin/accounts/rev/tokens', revService, { kind: 'api' })).json.token as string;
 
   // wscap: small cap to prove relayed WS frames (messages) are metered + cut off.
   const wscap = await admin(port, 'POST', '/admin/accounts', ROOT_TOKEN, {
@@ -297,9 +304,11 @@ beforeAll(async () => {
     leaseChunk: 16,
     concurrentMax: 5,
   });
-  wscapApi = (await admin(port, 'POST', '/admin/accounts/wscap/tokens', wscap.json.serviceToken as string, {
-    kind: 'api',
-  })).json.token as string;
+  wscapApi = (
+    await admin(port, 'POST', '/admin/accounts/wscap/tokens', wscap.json.serviceToken as string, {
+      kind: 'api',
+    })
+  ).json.token as string;
 
   // dollars: created via dollar amounts (created here, before the global-ceiling
   // test consumes the remaining headroom). 1 op = $0.000001 → dayUsd 0.0005 = 500.
@@ -507,22 +516,20 @@ describe('limit surfacing (headers + control plane)', () => {
 
   test('the registered message includes the account snapshot', async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?id=hdr-reg`);
-    const account = await new Promise<{ slug: string; day: { limit: number }; level: string }>(
-      (resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('no registered reply')), 8000);
-        ws.on('open', () =>
-          ws.send(JSON.stringify({ type: 'register', tunnelId: 'hdr-reg', secret: hdrApi, authRequired: false }))
-        );
-        ws.on('message', (m) => {
-          const msg = JSON.parse(m.toString());
-          if (msg.type === 'registered') {
-            clearTimeout(timer);
-            resolve(msg.account);
-          }
-        });
-        ws.on('error', reject);
-      }
-    );
+    const account = await new Promise<{ slug: string; day: { limit: number }; level: string }>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('no registered reply')), 8000);
+      ws.on('open', () =>
+        ws.send(JSON.stringify({ type: 'register', tunnelId: 'hdr-reg', secret: hdrApi, authRequired: false }))
+      );
+      ws.on('message', (m) => {
+        const msg = JSON.parse(m.toString());
+        if (msg.type === 'registered') {
+          clearTimeout(timer);
+          resolve(msg.account);
+        }
+      });
+      ws.on('error', reject);
+    });
     try {
       ws.close();
     } catch {
@@ -812,6 +819,82 @@ describe('fleet usage summary', () => {
 });
 
 describe('robustness regressions', () => {
+  test('an older device credential cannot evict the newest connector', async () => {
+    const older = (
+      await admin(port, 'POST', '/admin/accounts/hdr/tokens', ROOT_TOKEN, { kind: 'api', label: 'old-host' })
+    ).json.token as string;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const newer = (
+      await admin(port, 'POST', '/admin/accounts/hdr/tokens', ROOT_TOKEN, { kind: 'api', label: 'current-host' })
+    ).json.token as string;
+    const id = 'device-fence';
+
+    const connect = (secret: string, replace: boolean, body: string) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?id=${id}`);
+      let errorMessage: string | undefined;
+      let fatal = false;
+      const result = new Promise<{ ok: boolean; code?: number; fatal?: boolean; message?: string }>((resolve) => {
+        const timer = setTimeout(() => resolve({ ok: false, code: -1 }), 8000);
+        ws.on('open', () =>
+          ws.send(JSON.stringify({ type: 'register', tunnelId: id, secret, authRequired: false, replace }))
+        );
+        ws.on('message', (raw) => {
+          const message = JSON.parse(raw.toString()) as {
+            type?: string;
+            fatal?: boolean;
+            message?: string;
+            reqId?: string;
+          };
+          if (message.type === 'error') {
+            errorMessage = message.message;
+            fatal = message.fatal === true;
+          }
+          if (message.type === 'registered') {
+            clearTimeout(timer);
+            resolve({ ok: true });
+          }
+          if (message.type === 'request') {
+            ws.send(
+              JSON.stringify({
+                type: 'response',
+                reqId: message.reqId,
+                status: 200,
+                headers: {},
+                body: Buffer.from(body).toString('base64'),
+              })
+            );
+          }
+        });
+        ws.on('close', (code) => {
+          clearTimeout(timer);
+          resolve({ code, fatal, message: errorMessage, ok: false });
+        });
+        ws.on('error', () => {});
+      });
+      const closed = new Promise<number>((resolve) => ws.on('close', resolve));
+      return { closed, result, ws };
+    };
+
+    const oldConnector = connect(older, false, 'older');
+    expect(await oldConnector.result).toEqual({ ok: true });
+    const currentConnector = connect(newer, true, 'newer');
+    expect(await currentConnector.result).toEqual({ ok: true });
+    expect(await oldConnector.closed).toBe(4001);
+
+    const staleReconnect = connect(older, true, 'stale');
+    const rejected = await staleReconnect.result;
+    expect(rejected.ok).toBe(false);
+    expect(rejected.code).toBe(4002);
+    expect(rejected.fatal).toBe(true);
+    expect(rejected.message).toContain('newer authenticated device');
+    const response = await reqFull(port, id, '/still-current');
+
+    currentConnector.ws.close();
+    staleReconnect.ws.close();
+    expect(response.status).toBe(200);
+    expect(response.body).toBe('newer');
+  }, 20000);
+
   test('register-replace does not throttle the surviving tunnel (regId race)', async () => {
     const id = 'race-t';
     const reg = (ws: WebSocket, replace: boolean) =>
@@ -876,7 +959,9 @@ describe('robustness regressions', () => {
         }
         if (msg.type === 'request') {
           // Reply with body that is NOT valid base64 — the relay must 502, not throw/hang.
-          ws.send(JSON.stringify({ type: 'response', reqId: msg.reqId, status: 200, headers: {}, body: '@@not base64@@' }));
+          ws.send(
+            JSON.stringify({ type: 'response', reqId: msg.reqId, status: 200, headers: {}, body: '@@not base64@@' })
+          );
         }
       });
       ws.on('error', reject);

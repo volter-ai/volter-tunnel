@@ -117,6 +117,10 @@ export interface AuthorizeResult {
   reservedMax?: number;
 }
 
+/** Internal RegistryDO lookup used to fence one reserved id to the newest
+ * active device credential without exposing token hashes to clients. */
+export type DeviceCredentialResult = { ok: true; id: string; createdAt: string } | { ok: false };
+
 /** Result of a lease() call. */
 export interface LeaseResult {
   grant: number;
