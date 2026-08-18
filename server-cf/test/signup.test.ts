@@ -106,6 +106,22 @@ function get(
   });
 }
 
+function del(
+  port: number,
+  path: string,
+  headers: Record<string, string> = {}
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path, method: 'DELETE', headers }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => (body += chunk));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, json: body ? JSON.parse(body) : {} }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 /** Raw control register — resolves ok on `registered`, else {ok:false,code}. */
 function rawRegister(port: number, id: string, secret: string): Promise<{ ok: boolean; code?: number }> {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?id=${id}`);
@@ -183,6 +199,28 @@ describe('self-service /me (api token reads its own account + usage)', () => {
     const body = JSON.parse(me.body) as { slug: string; usage: unknown };
     expect(body.slug).toBe('gh-4242');
     expect(body.usage).toBeTruthy();
+  }, 20000);
+
+  test('lists stable ids and lets the owner release one without root', async () => {
+    const signup = await post(port, '/signup/github', { token: 'good-token' });
+    const apiToken = signup.json.token as string;
+    expect((await rawRegister(port, 'owner-release', apiToken)).ok).toBe(true);
+
+    const me = await get(port, '/me', { authorization: `Bearer ${apiToken}` });
+    const usage = (JSON.parse(me.body) as { usage: { reservedTunnels: string[]; reservedMax: number } }).usage;
+    expect(usage.reservedTunnels).toContain('owner-release');
+    expect(usage.reservedMax).toBe(3);
+
+    const released = await del(port, '/me/reservations/owner-release', {
+      authorization: `Bearer ${apiToken}`,
+    });
+    expect(released.status).toBe(200);
+    expect(released.json.revoked).toBe(true);
+
+    const missing = await del(port, '/me/reservations/not-mine', {
+      authorization: `Bearer ${apiToken}`,
+    });
+    expect(missing.status).toBe(404);
   }, 20000);
 
   test('GET /me without a token is 401', async () => {

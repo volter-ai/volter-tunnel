@@ -1,6 +1,6 @@
 {
   "name": "@volter/tunnel-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server exposing volter-tunnel account/usage/abuse operations as tools for AI agents.",
   "type": "module",
   "license": "Apache-2.0",

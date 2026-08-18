@@ -18,6 +18,7 @@ export function formatUsage(u: AccountUsage): string {
     `Account ${u.slug} — ${u.status}`,
     `${line('Today', u.usd.dayUsed, u.usd.dayLimit, u.day.pct)}   ·  ${u.openTunnels}/${u.concurrentMax} tunnels open`,
     line('Month', u.usd.monthUsed, u.usd.monthLimit, u.month.pct),
+    `  Stable ids  ${u.reservedTunnels.length}/${u.reservedMax}: ${u.reservedTunnels.join(', ') || 'none'}`,
   ].join('\n');
 }
 

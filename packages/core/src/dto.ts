@@ -50,6 +50,10 @@ export interface AccountUsage {
   month: UsageWindow;
   openTunnels: number;
   concurrentMax: number;
+  /** Stable tunnel ids currently owned by this account, whether connected or idle. */
+  reservedTunnels: string[];
+  /** Maximum number of distinct stable tunnel ids this account may own. */
+  reservedMax: number;
   resetAt: { day: string; month: string };
   usd: { dayUsed: number; dayLimit: number; monthUsed: number; monthLimit: number };
   raw?: { requests: number; wsUpgrades: number; bytes: number; seconds: number };

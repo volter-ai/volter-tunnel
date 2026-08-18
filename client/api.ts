@@ -82,6 +82,11 @@ export class VolterClient {
     return (await this.whoami()).usage;
   }
 
+  /** Release one stable tunnel id owned by the caller's account. */
+  releaseReservation(tunnelId: string): Promise<{ ok: boolean; revoked: boolean; tunnelId: string }> {
+    return this.request('DELETE', `/me/reservations/${encodeURIComponent(tunnelId)}`);
+  }
+
   // ── admin (root token) ───────────────────────────────────────────────────────
 
   listAccounts(): Promise<unknown> {

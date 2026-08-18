@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { VolterClient } from '../client/api.ts';
-import { runAccount, runUsage, runWhoami } from '../client/cli.ts';
+import { runAccount, runReleaseReservation, runReservations, runUsage, runWhoami } from '../client/cli.ts';
 
 const usage = {
   slug: 'gh-1',
@@ -13,6 +13,8 @@ const usage = {
   month: { used: 0, leased: 0, limit: 10_000_000, remaining: 10_000_000, pct: 0 },
   openTunnels: 1,
   concurrentMax: 100,
+  reservedTunnels: ['app', 'app-media'],
+  reservedMax: 3,
   resetAt: { day: '2026-06-24', month: '2026-06' },
   usd: { dayUsed: 0, dayLimit: 1, monthUsed: 0, monthLimit: 10 },
 };
@@ -33,6 +35,7 @@ function stub(): { client: VolterClient; calls: Call[] } {
     createAccount: rec('createAccount', { slug: 'gh-9' }),
     patchLimits: rec('patchLimits', { ok: true }),
     setStatus: rec('setStatus', { ok: true }),
+    releaseReservation: rec('releaseReservation', { ok: true, revoked: true }),
   } as unknown as VolterClient;
   return { client, calls };
 }
@@ -50,6 +53,14 @@ describe('runWhoami / runUsage', () => {
     const { client } = stub();
     expect(await runUsage(client)).toContain('Account gh-1 — active');
     expect(JSON.parse(await runUsage(client, true)).usd.dayLimit).toBe(1);
+  });
+  test('reservations shows capacity and release delegates to the SDK', async () => {
+    const { client, calls } = stub();
+    expect(await runReservations(client)).toContain('Stable ids 2/3: app, app-media');
+    expect(JSON.parse(await runReservations(client, true)).reservedMax).toBe(3);
+    await runReleaseReservation(client, 'app');
+    expect(calls).toContainEqual({ method: 'releaseReservation', args: ['app'] });
+    await expect(runReleaseReservation(client, undefined)).rejects.toThrow(/Usage:/);
   });
 });
 

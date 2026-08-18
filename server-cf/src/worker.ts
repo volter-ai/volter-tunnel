@@ -79,7 +79,8 @@ export default {
       url.pathname.startsWith('/signup/') ||
       url.pathname === '/waitlist' ||
       url.pathname === '/report' ||
-      url.pathname === '/me'
+      url.pathname === '/me' ||
+      url.pathname.startsWith('/me/')
     ) {
       const id = env.REGISTRY.idFromName('registry');
       return env.REGISTRY.get(id).fetch(request);

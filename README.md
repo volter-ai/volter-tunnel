@@ -34,6 +34,8 @@ volter-tunnel login [--gist] [--host <url>]          # prove a GitHub identity, 
 volter-tunnel --port 3000 [--tunnel-id my-app]       # expose a local port; prints the URL (+ QR)
 volter-tunnel whoami                                  # your account + usage
 volter-tunnel usage [--json]                          # your current spend (today / month)
+volter-tunnel reservations [--json]                   # your stable ids + capacity
+volter-tunnel release <tunnel-id>                     # release one of your stable ids
 volter-tunnel account <list|usage|create|limits|suspend|resume> [slug] \
   [--day-usd N] [--month-usd N]                       # admin ops (needs the root token)
 ```
@@ -63,6 +65,7 @@ import { VolterClient } from '@volter/tunnel/client';
 
 const client = new VolterClient({ host: 'https://your-relay', token });
 const me = await client.whoami();          // { slug, name, usage }
+await client.releaseReservation('old-app');           // self-service; own ids only
 await client.createAccount({ slug: 'x', dayUsd: 10 });   // root token
 ```
 

@@ -12,6 +12,8 @@ const usage: AccountUsage = {
   month: { used: 500000, leased: 0, limit: 10000000, remaining: 9500000, pct: 5 },
   openTunnels: 2,
   concurrentMax: 100,
+  reservedTunnels: ['alpha', 'alpha-media'],
+  reservedMax: 3,
   resetAt: { day: '2026-06-24', month: '2026-06' },
   usd: { dayUsed: 0.05, dayLimit: 1, monthUsed: 0.5, monthLimit: 10 },
 };
@@ -34,6 +36,7 @@ describe('formatUsage', () => {
     expect(out).toContain('Today');
     expect(out).toContain('$0.05 / $1.00  (5%)');
     expect(out).toContain('2/100 tunnels open');
+    expect(out).toContain('Stable ids  2/3: alpha, alpha-media');
     expect(out).toContain('Month');
     expect(out).toContain('$0.50 / $10.00  (5%)');
   });

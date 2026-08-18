@@ -36,7 +36,7 @@ function requestViaTunnel(
   relayPort: number,
   tunnelId: string,
   opts: { path: string; method?: string; body?: string; headers?: Record<string, string> }
-): Promise<{ status: number; body: string }> {
+): Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
@@ -51,10 +51,11 @@ function requestViaTunnel(
         res.on('data', (c) => {
           body += c;
         });
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }));
       }
     );
     req.on('error', reject);
+    req.setTimeout(5000, () => req.destroy(new Error('tunnel request timed out')));
     if (opts.body) req.write(opts.body);
     req.end();
   });
@@ -82,6 +83,18 @@ beforeAll(async () => {
     if (req.url === '/hello') {
       res.writeHead(200, { 'content-type': 'text/plain' });
       res.end('hello from origin');
+    } else if (req.url === '/cached') {
+      const modified = 'Mon, 17 Aug 2026 12:00:00 GMT';
+      if (req.headers['if-modified-since'] === modified) {
+        res.writeHead(304, { 'last-modified': modified });
+        res.end();
+      } else {
+        res.writeHead(200, { 'content-type': 'text/plain', 'last-modified': modified });
+        res.end('cacheable');
+      }
+    } else if (req.url === '/empty') {
+      res.writeHead(204);
+      res.end();
     } else if (req.url === '/echo' && req.method === 'POST') {
       let b = '';
       req.on('data', (c) => {
@@ -214,6 +227,27 @@ test('relays a chunked/streamed response in full', async () => {
   const res = await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/stream' });
   expect(res.status).toBe(200);
   expect(res.body).toBe('chunk1-chunk2-chunk3');
+});
+
+test('terminates conditional 304, empty 204, and HEAD responses without a body', async () => {
+  const first = await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/cached' });
+  expect(first.status).toBe(200);
+  expect(first.body).toBe('cacheable');
+
+  const conditional = await requestViaTunnel(relayPort, TUNNEL_ID, {
+    path: '/cached',
+    headers: { 'If-Modified-Since': String(first.headers['last-modified']) },
+  });
+  expect(conditional.status).toBe(304);
+  expect(conditional.body).toBe('');
+
+  const empty = await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/empty' });
+  expect(empty.status).toBe(204);
+  expect(empty.body).toBe('');
+
+  const head = await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/hello', method: 'HEAD' });
+  expect(head.status).toBe(200);
+  expect(head.body).toBe('');
 });
 
 test('returns 404 from the origin through the tunnel', async () => {

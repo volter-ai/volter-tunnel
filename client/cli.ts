@@ -128,6 +128,25 @@ export async function runUsage(client: VolterClient, json = false): Promise<stri
   return json ? JSON.stringify(me.usage, null, 2) : formatUsage(me.usage);
 }
 
+/** List stable ids held by the caller, including the account capacity. */
+export async function runReservations(client: VolterClient, json = false): Promise<string> {
+  const usage = (await client.whoami()).usage;
+  const result = {
+    reservedTunnels: usage.reservedTunnels,
+    reservedMax: usage.reservedMax,
+    used: usage.reservedTunnels.length,
+  };
+  return json
+    ? JSON.stringify(result, null, 2)
+    : `Stable ids ${result.used}/${result.reservedMax}: ${result.reservedTunnels.join(', ') || 'none'}`;
+}
+
+/** Release one stable id held by the caller. */
+export async function runReleaseReservation(client: VolterClient, tunnelId: string | undefined): Promise<string> {
+  if (!tunnelId) throw new Error('Usage: volter-tunnel release <tunnel-id>');
+  return JSON.stringify(await client.releaseReservation(tunnelId), null, 2);
+}
+
 /** `account <sub> [slug]` admin dispatch → pretty JSON. Throws on a bad subcommand. */
 export async function runAccount(
   client: VolterClient,
@@ -171,8 +190,8 @@ if (invokedDirectly()) {
     }
   }
 
-  // `volter-tunnel whoami` / `usage` — read your own account via the saved token.
-  if (args[0] === 'whoami' || args[0] === 'usage') {
+  // Self-service account and reservation commands use the saved login token.
+  if (args[0] === 'whoami' || args[0] === 'usage' || args[0] === 'reservations' || args[0] === 'release') {
     const token = flag('token') || readSavedToken();
     if (!token) {
       console.error('Not logged in — run `volter-tunnel login` first.');
@@ -181,7 +200,15 @@ if (invokedDirectly()) {
     try {
       const client = new VolterClient({ host, token });
       const json = args.includes('--json');
-      console.log(args[0] === 'usage' ? await runUsage(client, json) : await runWhoami(client, json));
+      const output =
+        args[0] === 'usage'
+          ? await runUsage(client, json)
+          : args[0] === 'reservations'
+            ? await runReservations(client, json)
+            : args[0] === 'release'
+              ? await runReleaseReservation(client, args[1])
+              : await runWhoami(client, json);
+      console.log(output);
       process.exit(0);
     } catch (e) {
       console.error(`${args[0]} failed:`, e instanceof Error ? e.message : String(e));
@@ -216,6 +243,7 @@ if (invokedDirectly()) {
       'Usage:\n' +
         '  volter-tunnel login [--gist] [--token <t>] [--host <url>]\n' +
         '  volter-tunnel whoami | usage [--json] [--host <url>]\n' +
+        '  volter-tunnel reservations [--json] | release <tunnel-id> [--host <url>]\n' +
         '  volter-tunnel account <list|usage|create|limits|suspend|resume> [slug] [--day-usd N] [--month-usd N]\n' +
         '  volter-tunnel --port <port> [--host <url>] [--tunnel-id <id>] [--auth-not-required] [--basic-auth user:pass] [--no-qr]'
     );

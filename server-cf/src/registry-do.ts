@@ -209,6 +209,16 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     return res.json();
   }
 
+  private async accountReservations(slug: string): Promise<{ reservedTunnels: string[]; reservedMax: number }> {
+    const usage = (await this.accountUsage(slug)) as { reservedTunnels?: unknown; reservedMax?: unknown };
+    return {
+      reservedTunnels: Array.isArray(usage.reservedTunnels)
+        ? usage.reservedTunnels.filter((value): value is string => typeof value === 'string').sort()
+        : [],
+      reservedMax: typeof usage.reservedMax === 'number' ? usage.reservedMax : 0,
+    };
+  }
+
   /** Live usage for every account + fleet totals, in dollars (operator view). */
   private async usageSummary(): Promise<unknown> {
     interface U {
@@ -305,6 +315,24 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       return json({ slug: who.slug, name: dir.name, usage: await this.accountUsage(who.slug) });
     }
 
+    // Self-service reservation release. The account token proves the caller,
+    // AccountDO proves current ownership, and TunnelDO rechecks the expected
+    // owner atomically before clearing anything so a reclaim race cannot revoke
+    // another account's handle.
+    if (parts[0] === 'me' && parts[1] === 'reservations' && parts[2]) {
+      if (request.method !== 'DELETE') return json({ error: 'method not allowed' }, 405);
+      const who = await this.resolveAccountToken(request);
+      if (!who) return json({ error: 'unauthorized' }, 401);
+      const dir = this.accounts.get(who.slug);
+      if (!dir || dir.status !== 'active') return json({ error: 'account suspended' }, 403);
+      const tunnelId = decodeURIComponent(parts[2]);
+      const reservations = await this.accountReservations(who.slug);
+      if (!reservations.reservedTunnels.includes(tunnelId)) {
+        return json({ error: `tunnel id '${tunnelId}' is not reserved by this account` }, 404);
+      }
+      return this.revokeReservationForward(tunnelId, who.slug);
+    }
+
     // Fleet usage summary (root): every account's live usage + dollars in one call.
     if (parts[0] === 'admin' && parts[1] === 'usage' && request.method === 'GET') {
       const auth = await this.authenticate(request);
@@ -340,7 +368,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       const auth = await this.authenticate(request);
       if (auth?.kind !== 'root') return json({ error: 'root token required' }, 403);
       if (request.method !== 'DELETE') return json({ error: 'method not allowed' }, 405);
-      return this.revokeReservationForward(parts[2]);
+      return this.revokeReservationForward(decodeURIComponent(parts[2]));
     }
 
     if (parts[0] !== 'admin' || parts[1] !== 'accounts') {
@@ -617,12 +645,18 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
   /** Revoke a reserved handle by routing to its TunnelDO (which clears the
    *  reservation, releases the account slot, and disconnects any live client).
    *  Forwards the root token so the TunnelDO's internal endpoint accepts it. */
-  private async revokeReservationForward(tunnelId: string): Promise<Response> {
+  private async revokeReservationForward(tunnelId: string, expectedOwner?: string): Promise<Response> {
     if (!this.env.TUNNEL) return json({ error: 'tunnel binding unavailable' }, 500);
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(tunnelId)) {
+      return json({ error: 'invalid tunnel id' }, 400);
+    }
     const id = this.env.TUNNEL.idFromName(tunnelId);
     const r = await this.env.TUNNEL.get(id).fetch('https://tunnel/__internal/revoke-reservation', {
       method: 'POST',
-      headers: { authorization: `Bearer ${this.env.ROOT_TOKEN ?? ''}` },
+      headers: {
+        authorization: `Bearer ${this.env.ROOT_TOKEN ?? ''}`,
+        ...(expectedOwner ? { 'x-volter-expected-owner': expectedOwner } : {}),
+      },
     });
     const data = (await r.json().catch(() => ({}))) as Record<string, unknown>;
     return json({ tunnelId, ...data }, r.status);

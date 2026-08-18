@@ -2,8 +2,26 @@
 
 All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Packages version
-independently: `@volter/tunnel` continues its line (→ **2.0.2**), while
-`@volter/tunnel-core` and `@volter/tunnel-mcp` are new at **0.1.0**.
+independently: `@volter/tunnel` continues its line (→ **2.0.3**), while
+`@volter/tunnel-core` and `@volter/tunnel-mcp` continue at **0.1.1**.
+
+## @volter/tunnel 2.0.3 — @volter/tunnel-core 0.1.1 — @volter/tunnel-mcp 0.1.1
+
+### Added
+
+- Account usage now includes the caller's stable tunnel ids and reservation
+  capacity. Owners can inspect them with `volter-tunnel reservations` and
+  release their own ids with `volter-tunnel release <id>` without a root token.
+- Reservation-cap rejection messages now include the exact used/available
+  capacity, owned ids, and the self-service recovery command.
+- The MCP server exposes matching `reservations` and `release_reservation`
+  tools.
+
+### Fixed
+
+- The Cloudflare relay now resolves `204`, `205`, `304`, and `HEAD` responses
+  without constructing a forbidden response body, so conditional requests no
+  longer hang indefinitely.
 
 ## @volter/tunnel 2.0.2
 

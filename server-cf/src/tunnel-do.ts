@@ -413,7 +413,7 @@ export class TunnelDO extends DurableObject<Env> {
       if (!this.env.ROOT_TOKEN || !safeEqual(bearer, this.env.ROOT_TOKEN)) {
         return new Response('forbidden', { status: 403 });
       }
-      return this.revokeReservation();
+      return this.revokeReservation(request.headers.get('x-volter-expected-owner'));
     }
 
     // Control channel: the tunnel client connects to /ws?id=<tunnelId>.
@@ -431,8 +431,11 @@ export class TunnelDO extends DurableObject<Env> {
 
   /** Revoke this tunnelId's reservation (#3): release the slot on the owner's
    *  account, clear the persistent record, and disconnect any live client. */
-  private async revokeReservation(): Promise<Response> {
+  private async revokeReservation(expectedOwner: string | null): Promise<Response> {
     const res = await this.ctx.storage.get<Reservation>('reservation');
+    if (expectedOwner && res?.ownerSlug !== expectedOwner) {
+      return Response.json({ ok: false, error: 'reservation owner changed' }, { status: 409 });
+    }
     if (res?.tunnelId) {
       await this.accountRpc('/release-id', { tunnelId: res.tunnelId }, res.ownerSlug);
     }
@@ -961,7 +964,11 @@ export class TunnelDO extends DurableObject<Env> {
       if (!auth || !auth.ok) {
         const reason = auth?.reason ?? 'account unavailable';
         const code = reason === 'badToken' ? 4003 : 4029;
-        sendFrame(ws, { type: 'error', message: `Tunnel rejected: ${reason}` });
+        const message =
+          reason === 'reservationCap'
+            ? `Tunnel rejected: reservation capacity ${auth?.reservedTunnels?.length ?? 0}/${auth?.reservedMax ?? 0}. Reserved ids: ${auth?.reservedTunnels?.join(', ') || 'none'}. Run "volter-tunnel reservations" to inspect or "volter-tunnel release <id>" to free one.`
+            : `Tunnel rejected: ${reason}`;
+        sendFrame(ws, { type: 'error', message });
         ws.close(code, reason);
         return;
       }
@@ -1054,6 +1061,14 @@ export class TunnelDO extends DurableObject<Env> {
         this.headerRules
       );
       for (const [k, v] of Object.entries(pending.rate)) headers.set(k, v);
+      const status = (msg.status as number) || 200;
+      // Fetch forbids a body for these statuses. Constructing a Response with a
+      // ReadableStream throws after the pending entry has been removed, leaving
+      // the visitor request unresolved forever. HEAD is bodyless by contract too.
+      if (pending.request.method === 'HEAD' || status === 204 || status === 205 || status === 304) {
+        pending.resolve(new Response(null, { status, headers }));
+        return;
+      }
       const self = this;
       const readable = new ReadableStream<Uint8Array>({
         start(controller) {
@@ -1073,7 +1088,7 @@ export class TunnelDO extends DurableObject<Env> {
           }
         },
       });
-      pending.resolve(new Response(readable, { status: (msg.status as number) || 200, headers }));
+      pending.resolve(new Response(readable, { status, headers }));
       return;
     }
 

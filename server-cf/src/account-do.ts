@@ -291,7 +291,12 @@ export class AccountDO extends DurableObject<MeteringEnv> {
     // very large reservedMax makes it effectively unlimited.
     const reservedMax = this.config.reservedMax ?? envNum(this.env.DEFAULT_RESERVED_MAX, 3);
     if (reservedMax > 0 && !this.reserved.has(tunnelId) && this.reserved.size >= reservedMax) {
-      return { ok: false, reason: 'reservationCap' };
+      return {
+        ok: false,
+        reason: 'reservationCap',
+        reservedTunnels: [...this.reserved].sort(),
+        reservedMax,
+      };
     }
 
     // Create the entry, or take it over on replace (keep the outstanding lease,
@@ -423,6 +428,8 @@ export class AccountDO extends DurableObject<MeteringEnv> {
       },
       openTunnels: this.open.size,
       concurrentMax: c?.concurrentMax ?? 0,
+      reservedTunnels: [...this.reserved].sort(),
+      reservedMax: c?.reservedMax ?? envNum(this.env.DEFAULT_RESERVED_MAX, 3),
       raw: { ...this.usage.raw },
       resetAt: { day: this.usage.day, month: this.usage.month },
       usd: {

@@ -110,14 +110,17 @@ function rawRegister(
   port: number,
   id: string,
   secret: string
-): { ws: WebSocket; result: Promise<{ ok: boolean; code?: number }> } {
+): { ws: WebSocket; result: Promise<{ ok: boolean; code?: number; message?: string }> } {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?id=${id}`);
-  const result = new Promise<{ ok: boolean; code?: number }>((resolve) => {
+  const result = new Promise<{ ok: boolean; code?: number; message?: string }>((resolve) => {
+    let message: string | undefined;
     const timer = setTimeout(() => resolve({ ok: false, code: -1 }), 8000);
     ws.on('open', () => ws.send(JSON.stringify({ type: 'register', tunnelId: id, secret, authRequired: false })));
     ws.on('message', (m) => {
       try {
-        if (JSON.parse(m.toString()).type === 'registered') {
+        const frame = JSON.parse(m.toString()) as { type?: string; message?: string };
+        if (frame.type === 'error') message = frame.message;
+        if (frame.type === 'registered') {
           clearTimeout(timer);
           resolve({ ok: true });
         }
@@ -127,7 +130,7 @@ function rawRegister(
     });
     ws.on('close', (c) => {
       clearTimeout(timer);
-      resolve({ ok: false, code: c });
+      resolve({ ok: false, code: c, message });
     });
     ws.on('error', () => {});
   });
@@ -970,6 +973,9 @@ describe('reserved-id count cap (#3)', () => {
     }
     expect(res.ok).toBe(false);
     expect(res.code).toBe(4029);
+    expect(res.message).toContain('reservation capacity 2/2');
+    expect(res.message).toContain('rezcap-a, rezcap-b');
+    expect(res.message).toContain('volter-tunnel release <id>');
   }, 15000);
 
   test('re-registering an already-held id is free (does not count against the cap)', async () => {

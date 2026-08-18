@@ -48,6 +48,14 @@ describe('VolterClient self-service', () => {
     expect(await client.usage()).toEqual({ credits: 42 });
   });
 
+  test('releaseReservation() deletes through the caller-owned endpoint', async () => {
+    const { client, calls } = clientWith({
+      'DELETE /me/reservations/my-app': { json: { ok: true, revoked: true, tunnelId: 'my-app' } },
+    });
+    await client.releaseReservation('my-app');
+    expect(calls[0]).toMatchObject({ method: 'DELETE', path: '/me/reservations/my-app', auth: 'Bearer vta_test' });
+  });
+
   test('a non-2xx response throws VolterApiError with status + message', async () => {
     const { client } = clientWith({ 'GET /me': { status: 401, json: { error: 'unauthorized' } } });
     await expect(client.whoami()).rejects.toThrow(VolterApiError);

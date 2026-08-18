@@ -13,6 +13,8 @@ const usage = {
   month: { used: 0, leased: 0, limit: 10000000, remaining: 10000000, pct: 0 },
   openTunnels: 1,
   concurrentMax: 100,
+  reservedTunnels: ['app'],
+  reservedMax: 3,
   resetAt: { day: '2026-06-24', month: '2026-06' },
   usd: { dayUsed: 0, dayLimit: 1, monthUsed: 0, monthLimit: 10 },
 };
@@ -37,6 +39,7 @@ function stubClient(): { client: VolterClient; calls: Call[] } {
     reports: rec('reports', { reports: [] }),
     waitlist: rec('waitlist', { waitlist: [] }),
     revokeReservation: rec('revokeReservation', { ok: true }),
+    releaseReservation: rec('releaseReservation', { ok: true }),
   } as unknown as VolterClient;
   return { client, calls };
 }
@@ -54,6 +57,8 @@ describe('buildTools', () => {
     expect(names).toEqual([
       'whoami',
       'usage',
+      'reservations',
+      'release_reservation',
       'account_list',
       'account_usage',
       'account_create',
@@ -72,6 +77,18 @@ describe('buildTools', () => {
     const tools = buildTools(client);
     expect(await byName(tools, 'whoami').run({})).toContain('Logged in as github:octocat');
     expect(await byName(tools, 'usage').run({})).toContain('Account gh-1 — active');
+  });
+
+  test('self-service reservation tools list and release owned ids', async () => {
+    const { client, calls } = stubClient();
+    const tools = buildTools(client);
+    expect(JSON.parse(await byName(tools, 'reservations').run({}))).toEqual({
+      reservedTunnels: ['app'],
+      reservedMax: 3,
+      used: 1,
+    });
+    await byName(tools, 'release_reservation').run({ tunnelId: 'app' });
+    expect(calls).toContainEqual({ method: 'releaseReservation', args: ['app'] });
   });
 
   test('account_usage passes the slug through', async () => {

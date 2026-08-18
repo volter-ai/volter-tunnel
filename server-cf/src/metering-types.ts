@@ -112,6 +112,9 @@ export interface AuthorizeResult {
   slug?: string;
   leaseChunk?: number;
   rate?: RateSnapshot;
+  /** Present on reservationCap so clients can explain and recover without root. */
+  reservedTunnels?: string[];
+  reservedMax?: number;
 }
 
 /** Result of a lease() call. */

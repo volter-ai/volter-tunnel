@@ -46,6 +46,25 @@ export function buildTools(client: VolterClient): ToolSpec[] {
       run: async () => formatUsage((await client.whoami()).usage),
     },
     {
+      name: 'reservations',
+      description: "List the caller's stable tunnel ids and reservation capacity.",
+      inputSchema: {},
+      run: async () => {
+        const usage = (await client.whoami()).usage;
+        return pretty({
+          reservedTunnels: usage.reservedTunnels,
+          reservedMax: usage.reservedMax,
+          used: usage.reservedTunnels.length,
+        });
+      },
+    },
+    {
+      name: 'release_reservation',
+      description: 'Release one stable tunnel id owned by the caller.',
+      inputSchema: { tunnelId: z.string().describe('The stable tunnel id to release') },
+      run: async (a) => pretty(await client.releaseReservation(String(a.tunnelId))),
+    },
+    {
       name: 'account_list',
       description: 'List all accounts with their usage and dollar spend (root).',
       inputSchema: {},
