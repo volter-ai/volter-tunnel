@@ -18,6 +18,11 @@ independently: `@volter/tunnel` continues its line (→ **2.0.5**), while
 - The relay marks a stale-device rejection as fatal, and current clients stop
   reconnecting until the operator restores or replaces their credential.
 
+### Fixed
+
+- Revoking the credential that owns a live tunnel also releases its fencing
+  rank, allowing another active device to replace that stale socket.
+
 ## @volter/tunnel 2.0.4 — @volter/tunnel-core 0.1.2 — @volter/tunnel-mcp 0.1.2
 
 ### Added

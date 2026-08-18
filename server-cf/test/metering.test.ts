@@ -824,9 +824,12 @@ describe('robustness regressions', () => {
       await admin(port, 'POST', '/admin/accounts/hdr/tokens', ROOT_TOKEN, { kind: 'api', label: 'old-host' })
     ).json.token as string;
     await new Promise((resolve) => setTimeout(resolve, 5));
-    const newer = (
-      await admin(port, 'POST', '/admin/accounts/hdr/tokens', ROOT_TOKEN, { kind: 'api', label: 'current-host' })
-    ).json.token as string;
+    const newerCredential = await admin(port, 'POST', '/admin/accounts/hdr/tokens', ROOT_TOKEN, {
+      kind: 'api',
+      label: 'current-host',
+    });
+    const newer = newerCredential.json.token as string;
+    const newerId = newerCredential.json.id as string;
     const id = 'device-fence';
 
     const connect = (secret: string, replace: boolean, body: string) => {
@@ -888,11 +891,21 @@ describe('robustness regressions', () => {
     expect(rejected.fatal).toBe(true);
     expect(rejected.message).toContain('newer authenticated device');
     const response = await reqFull(port, id, '/still-current');
+    expect(response.status).toBe(200);
+    expect(response.body).toBe('newer');
+
+    const revoked = await admin(port, 'DELETE', `/admin/accounts/hdr/tokens/${newerId}`, ROOT_TOKEN);
+    expect(revoked.status).toBe(200);
+    const recoveredConnector = connect(older, true, 'recovered');
+    expect(await recoveredConnector.result).toEqual({ ok: true });
+    expect(await currentConnector.closed).toBe(4001);
+    const recoveredResponse = await reqFull(port, id, '/recovered');
 
     currentConnector.ws.close();
     staleReconnect.ws.close();
-    expect(response.status).toBe(200);
-    expect(response.body).toBe('newer');
+    recoveredConnector.ws.close();
+    expect(recoveredResponse.status).toBe(200);
+    expect(recoveredResponse.body).toBe('recovered');
   }, 20000);
 
   test('register-replace does not throttle the surviving tunnel (regId race)', async () => {

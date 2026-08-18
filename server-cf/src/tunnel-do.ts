@@ -978,19 +978,27 @@ export class TunnelDO extends DurableObject<Env> {
       if (others.length) {
         if (msg.replace) {
           const incomingRank = credential?.ok === true ? `${credential.createdAt}\u0000${credential.id}` : undefined;
-          const newerOwner =
-            incomingRank === undefined
-              ? undefined
-              : others.find((candidate) => {
-                  const attached = candidate.deserializeAttachment() as CtlAttach | null;
-                  if (
-                    attached?.credentialId === undefined ||
-                    attached.credentialCreatedAt === undefined ||
-                    attached.credentialId === credential.id
-                  )
-                    return false;
-                  return `${attached.credentialCreatedAt}\u0000${attached.credentialId}` > incomingRank;
-                });
+          let newerOwner: WebSocket | undefined;
+          if (incomingRank !== undefined) {
+            for (const candidate of others) {
+              const attached = candidate.deserializeAttachment() as CtlAttach | null;
+              if (
+                attached?.credentialId === undefined ||
+                attached.credentialCreatedAt === undefined ||
+                attached.credentialId === credential.id ||
+                `${attached.credentialCreatedAt}\u0000${attached.credentialId}` <= incomingRank
+              )
+                continue;
+              const ownerCredential = await this.registryRpc<DeviceCredentialResult>('/resolve-device-credential', {
+                slug,
+                credentialId: attached.credentialId,
+              });
+              if (ownerCredential?.ok === true) {
+                newerOwner = candidate as WebSocket;
+                break;
+              }
+            }
+          }
           if (newerOwner !== undefined) {
             sendFrame(ws, {
               type: 'error',
