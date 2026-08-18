@@ -169,7 +169,10 @@ beforeAll(async () => {
       GLOBAL_MONTH_LIMIT: '20000000',
       DEFAULT_CONCURRENT: '10',
       DEFAULT_LEASE_CHUNK: '50',
-      DEFAULT_RESERVED_MAX: '3',
+      // This suite reuses one GitHub account across independent signup/token
+      // scenarios. Reservation-cap behavior is covered in metering.test.ts;
+      // keep that unrelated policy from making token recovery order-sensitive.
+      DEFAULT_RESERVED_MAX: '50',
       SIGNUP_DAY_LIMIT: '1000',
       SIGNUP_MONTH_LIMIT: '20000',
       SIGNUP_ALLOWED_USERS: 'octocat, gistuser', // allowlist (with spaces, to test trimming)
@@ -207,7 +210,7 @@ describe('self-service /me (api token reads its own account + usage)', () => {
     const me = await get(port, '/me', { authorization: `Bearer ${apiToken}` });
     const usage = (JSON.parse(me.body) as { usage: { reservedTunnels: string[]; reservedMax: number } }).usage;
     expect(usage.reservedTunnels).toContain('owner-release');
-    expect(usage.reservedMax).toBe(3);
+    expect(usage.reservedMax).toBe(50);
 
     const released = await del(port, '/me/reservations/owner-release', {
       authorization: `Bearer ${apiToken}`,
