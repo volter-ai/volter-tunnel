@@ -120,15 +120,23 @@ function del(
   });
 }
 
-/** Raw control register — resolves ok on `registered`, else {ok:false,code}. */
-function rawRegister(port: number, id: string, secret: string): Promise<{ ok: boolean; code?: number }> {
+/** Raw control register — preserves the relay error/close reason for actionable
+ * failures instead of collapsing every rejection to `{ ok: false }`. */
+function rawRegister(
+  port: number,
+  id: string,
+  secret: string
+): Promise<{ ok: true } | { ok: false; code: number; message?: string }> {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?id=${id}`);
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ ok: false, code: -1 }), 8000);
+    let relayMessage: string | undefined;
+    const timer = setTimeout(() => resolve({ ok: false, code: -1, message: relayMessage ?? 'timeout' }), 8000);
     ws.on('open', () => ws.send(JSON.stringify({ type: 'register', tunnelId: id, secret, authRequired: false })));
     ws.on('message', (m) => {
       try {
-        if (JSON.parse(m.toString()).type === 'registered') {
+        const message = JSON.parse(m.toString()) as { type?: string; message?: string };
+        if (message.type === 'error') relayMessage = message.message;
+        if (message.type === 'registered') {
           clearTimeout(timer);
           ws.close();
           resolve({ ok: true });
@@ -137,9 +145,9 @@ function rawRegister(port: number, id: string, secret: string): Promise<{ ok: bo
         /* ignore */
       }
     });
-    ws.on('close', (c) => {
+    ws.on('close', (code, reason) => {
       clearTimeout(timer);
-      resolve({ ok: false, code: c });
+      resolve({ ok: false, code, message: relayMessage ?? (reason.toString() || undefined) });
     });
     ws.on('error', () => {});
   });
@@ -285,7 +293,7 @@ describe('self-service /me (api token reads its own account + usage)', () => {
     );
     expect(restored.status).toBe(200);
     expect(restored.json.restored).toBe(true);
-    expect((await rawRegister(port, 'restored-host', hostToken)).ok).toBe(true);
+    expect(await rawRegister(port, 'restored-host', hostToken)).toEqual({ ok: true });
   }, 30000);
 });
 

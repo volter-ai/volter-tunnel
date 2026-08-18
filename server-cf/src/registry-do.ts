@@ -321,6 +321,11 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     // auto-rotated. This is the recovery path for a persistent host whose token
     // was invalidated by the pre-2.0.4 single-login policy.
     if (parts[0] === 'me' && parts[1] === 'tokens') {
+      // Workerd requires an incoming body to be consumed before the response is
+      // sent. SDK callers send no restore body, but generic HTTP/MCP clients may
+      // send `{}`; drain it before auth/dispatch so that request cannot wedge the
+      // next Durable Object request.
+      if (request.method === 'POST') await request.arrayBuffer();
       const who = await this.resolveAccountToken(request);
       if (!who) return json({ error: 'unauthorized' }, 401);
       const dir = this.accounts.get(who.slug);
