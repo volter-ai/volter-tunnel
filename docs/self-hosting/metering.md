@@ -19,7 +19,7 @@ credentials.
   |---|---|---|---|---|
   | root | `vtr_<rand>` | us | create accounts, **set limits**, anything | — |
   | service | `vts_<slug>_<rand>` | account owner | mint/revoke api tokens, suspend/resume, read usage | **raise its own limits** |
-  | api | `vta_<slug>_<rand>` | tunnel clients | register tunnels (the "tunnel secret") | manage anything |
+  | api | `vta_<slug>_<rand>` | tunnel clients / account owner | register tunnels; inspect/release owned reservations; manage own device tokens | manage accounts or limits |
 
   The slug is embedded in service/api tokens so the data plane routes straight to
   the strongly-consistent `AccountDO` with no global index — the same approach
@@ -131,6 +131,11 @@ GET    /admin/accounts/:slug/usage          svc*    live usage snapshot
 ```
 `svc*` = that account's service token **or** root. A service token is scoped to
 its own slug.
+
+An api token also has owner-scoped recovery endpoints under `/me`: `GET
+/me/tokens` returns safe metadata, `DELETE /me/tokens/:id` revokes a selected
+device, and `POST /me/tokens/:id/restore` deliberately restores it. GitHub login
+mints an independent device token and never implicitly revokes another device.
 
 ## Configuration (wrangler vars / secrets)
 

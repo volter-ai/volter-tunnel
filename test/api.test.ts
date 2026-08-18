@@ -56,6 +56,22 @@ describe('VolterClient self-service', () => {
     expect(calls[0]).toMatchObject({ method: 'DELETE', path: '/me/reservations/my-app', auth: 'Bearer vta_test' });
   });
 
+  test('device-token management uses owner-scoped endpoints', async () => {
+    const { client, calls } = clientWith({
+      'GET /me/tokens': { json: { tokens: [{ id: 'host-1', last4: 'aB3x' }] } },
+      'POST /me/tokens/host-1/restore': { json: { ok: true, id: 'host-1', restored: true } },
+      'DELETE /me/tokens/host-1': { json: { ok: true, id: 'host-1' } },
+    });
+    expect((await client.listDeviceTokens()).tokens[0]?.id).toBe('host-1');
+    await client.restoreDeviceToken('host-1');
+    await client.revokeDeviceToken('host-1');
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'GET /me/tokens',
+      'POST /me/tokens/host-1/restore',
+      'DELETE /me/tokens/host-1',
+    ]);
+  });
+
   test('a non-2xx response throws VolterApiError with status + message', async () => {
     const { client } = clientWith({ 'GET /me': { status: 401, json: { error: 'unauthorized' } } });
     await expect(client.whoami()).rejects.toThrow(VolterApiError);

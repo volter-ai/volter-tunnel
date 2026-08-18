@@ -35,7 +35,7 @@ describe('wireTools', () => {
     const { register, handlers } = fakeRegister();
     wireTools(register, { whoami: () => Promise.resolve({ slug: 'gh-1', usage }) } as unknown as VolterClient);
     expect(handlers.has('whoami')).toBe(true);
-    expect(handlers.size).toBe(13);
+    expect(handlers.size).toBe(16);
   });
 
   test('a successful handler returns a text content result', async () => {

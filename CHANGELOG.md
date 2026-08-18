@@ -2,8 +2,33 @@
 
 All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Packages version
-independently: `@volter/tunnel` continues its line (→ **2.0.3**), while
-`@volter/tunnel-core` and `@volter/tunnel-mcp` continue at **0.1.1**.
+independently: `@volter/tunnel` continues its line (→ **2.0.4**), while
+`@volter/tunnel-core` and `@volter/tunnel-mcp` continue at **0.1.2**.
+
+## @volter/tunnel 2.0.4 — @volter/tunnel-core 0.1.2 — @volter/tunnel-mcp 0.1.2
+
+### Added
+
+- Owners can list safe device-token metadata and explicitly restore or revoke a
+  selected credential with `volter-tunnel tokens` and `volter-tunnel token
+  <restore|revoke> <id>`; the MCP server exposes matching tools.
+- The relay now supplies an authoritative `X-Forwarded-For` value from
+  `CF-Connecting-IP` on HTTP and WebSocket requests.
+
+### Changed
+
+- GitHub login creates an independent, device-labeled api token instead of
+  revoking the prior login token. Persistent hosts therefore survive account
+  logins from other computers.
+- Tunneled responses are non-cacheable unless the origin explicitly marks them
+  public; `/api` is always private/no-store. Explicit public immutable assets
+  retain their origin caching policy.
+
+### Fixed
+
+- A revoked host credential is now reported as a credential problem instead of
+  being mistaken for a reservation lock, and the error points to the owner
+  recovery commands.
 
 ## @volter/tunnel 2.0.3 — @volter/tunnel-core 0.1.1 — @volter/tunnel-mcp 0.1.1
 

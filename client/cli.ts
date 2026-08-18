@@ -66,10 +66,10 @@ async function runLogin(opts: { host: string; method: 'token' | 'gist'; token?: 
     };
     const url = sh('gh', ['gist', 'create', '-p', '-d', 'volter-tunnel identity verification', '-'], nonce);
     const gistId = url.split('/').pop() ?? '';
-    resp = await postJson('/signup/github/gist/verify', { gistId, verifier });
+    resp = await postJson('/signup/github/gist/verify', { gistId, verifier, device: os.hostname() });
   } else {
     const token = opts.token ?? sh('gh', ['auth', 'token']);
-    resp = await postJson('/signup/github', { token });
+    resp = await postJson('/signup/github', { token, device: os.hostname() });
   }
 
   const file = tokenFilePath();
@@ -147,6 +147,34 @@ export async function runReleaseReservation(client: VolterClient, tunnelId: stri
   return JSON.stringify(await client.releaseReservation(tunnelId), null, 2);
 }
 
+/** List owner-visible device-token metadata without ever printing a secret. */
+export async function runTokens(client: VolterClient, json = false): Promise<string> {
+  const result = await client.listDeviceTokens();
+  if (json) return JSON.stringify(result, null, 2);
+  if (!result.tokens.length) return 'Device tokens: none';
+  return [
+    'Device tokens:',
+    ...result.tokens.map((t) => {
+      const state = t.revokedAt ? `revoked ${t.revokedAt}` : 'active';
+      return `  ${t.id}  …${t.last4}  ${state}${t.current ? '  (current)' : ''}  ${t.label}`;
+    }),
+  ].join('\n');
+}
+
+/** Restore or revoke one selected device token. */
+export async function runTokenAction(
+  client: VolterClient,
+  action: string | undefined,
+  tokenId: string | undefined
+): Promise<string> {
+  if (!tokenId || (action !== 'restore' && action !== 'revoke')) {
+    throw new Error('Usage: volter-tunnel token <restore|revoke> <token-id>');
+  }
+  const result =
+    action === 'restore' ? await client.restoreDeviceToken(tokenId) : await client.revokeDeviceToken(tokenId);
+  return JSON.stringify(result, null, 2);
+}
+
 /** `account <sub> [slug]` admin dispatch → pretty JSON. Throws on a bad subcommand. */
 export async function runAccount(
   client: VolterClient,
@@ -191,7 +219,14 @@ if (invokedDirectly()) {
   }
 
   // Self-service account and reservation commands use the saved login token.
-  if (args[0] === 'whoami' || args[0] === 'usage' || args[0] === 'reservations' || args[0] === 'release') {
+  if (
+    args[0] === 'whoami' ||
+    args[0] === 'usage' ||
+    args[0] === 'reservations' ||
+    args[0] === 'release' ||
+    args[0] === 'tokens' ||
+    args[0] === 'token'
+  ) {
     const token = flag('token') || readSavedToken();
     if (!token) {
       console.error('Not logged in — run `volter-tunnel login` first.');
@@ -207,7 +242,11 @@ if (invokedDirectly()) {
             ? await runReservations(client, json)
             : args[0] === 'release'
               ? await runReleaseReservation(client, args[1])
-              : await runWhoami(client, json);
+              : args[0] === 'tokens'
+                ? await runTokens(client, json)
+                : args[0] === 'token'
+                  ? await runTokenAction(client, args[1], args[2])
+                  : await runWhoami(client, json);
       console.log(output);
       process.exit(0);
     } catch (e) {
@@ -244,6 +283,7 @@ if (invokedDirectly()) {
         '  volter-tunnel login [--gist] [--token <t>] [--host <url>]\n' +
         '  volter-tunnel whoami | usage [--json] [--host <url>]\n' +
         '  volter-tunnel reservations [--json] | release <tunnel-id> [--host <url>]\n' +
+        '  volter-tunnel tokens [--json] | token <restore|revoke> <token-id> [--host <url>]\n' +
         '  volter-tunnel account <list|usage|create|limits|suspend|resume> [slug] [--day-usd N] [--month-usd N]\n' +
         '  volter-tunnel --port <port> [--host <url>] [--tunnel-id <id>] [--auth-not-required] [--basic-auth user:pass] [--no-qr]'
     );

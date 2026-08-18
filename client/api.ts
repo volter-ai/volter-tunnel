@@ -18,6 +18,17 @@ export interface Me {
   usage: AccountUsage;
 }
 
+/** Owner-visible metadata for one api/device token. Secret material and hashes
+ * are never returned by the relay. */
+export interface DeviceToken {
+  id: string;
+  last4: string;
+  label: string;
+  createdAt: string;
+  revokedAt: string | null;
+  current: boolean;
+}
+
 export interface VolterClientOptions {
   /** Relay base URL, e.g. https://voltertest.xyz */
   host: string;
@@ -85,6 +96,22 @@ export class VolterClient {
   /** Release one stable tunnel id owned by the caller's account. */
   releaseReservation(tunnelId: string): Promise<{ ok: boolean; revoked: boolean; tunnelId: string }> {
     return this.request('DELETE', `/me/reservations/${encodeURIComponent(tunnelId)}`);
+  }
+
+  /** List this account's device credentials, including deliberately recoverable
+   * revoked metadata. */
+  listDeviceTokens(): Promise<{ tokens: DeviceToken[] }> {
+    return this.request('GET', '/me/tokens');
+  }
+
+  /** Restore a selected device credential invalidated by an earlier login. */
+  restoreDeviceToken(tokenId: string): Promise<{ ok: boolean; id: string; restored: boolean }> {
+    return this.request('POST', `/me/tokens/${encodeURIComponent(tokenId)}/restore`);
+  }
+
+  /** Revoke a selected device credential. */
+  revokeDeviceToken(tokenId: string): Promise<{ ok: boolean; id: string; revokedAt: string }> {
+    return this.request('DELETE', `/me/tokens/${encodeURIComponent(tokenId)}`);
   }
 
   // ── admin (root token) ───────────────────────────────────────────────────────

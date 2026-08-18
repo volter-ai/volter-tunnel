@@ -95,6 +95,15 @@ beforeAll(async () => {
     } else if (req.url === '/empty') {
       res.writeHead(204);
       res.end();
+    } else if (req.url?.startsWith('/api/tenant')) {
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'private, no-cache' });
+      res.end(JSON.stringify({ cookie: req.headers.cookie ?? '', url: req.url }));
+    } else if (req.url === '/public-asset.js') {
+      res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'public, max-age=31536000, immutable' });
+      res.end('asset');
+    } else if (req.url === '/forwarded-for') {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end(String(req.headers['x-forwarded-for'] ?? 'missing'));
     } else if (req.url === '/echo' && req.method === 'POST') {
       let b = '';
       req.on('data', (c) => {
@@ -248,6 +257,33 @@ test('terminates conditional 304, empty 204, and HEAD responses without a body',
   const head = await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/hello', method: 'HEAD' });
   expect(head.status).toBe(200);
   expect(head.body).toBe('');
+});
+
+test('forces authenticated API responses out of shared caches while preserving explicit public assets', async () => {
+  const api = await requestViaTunnel(relayPort, TUNNEL_ID, {
+    path: '/api/tenant?account=one',
+    headers: { Cookie: 'session=tenant-one' },
+  });
+  expect(api.status).toBe(200);
+  expect(api.headers['cache-control']).toBe('private, no-store, max-age=0');
+  expect(api.headers['cdn-cache-control']).toBe('no-store');
+  expect(api.headers['cloudflare-cdn-cache-control']).toBe('no-store');
+  expect(String(api.headers.vary)).toContain('Cookie');
+  expect(api.body).toContain('tenant-one');
+  expect(api.body).toContain('account=one');
+
+  const asset = await requestViaTunnel(relayPort, TUNNEL_ID, { path: '/public-asset.js' });
+  expect(asset.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+  expect(asset.headers['cdn-cache-control']).toBeUndefined();
+});
+
+test('overwrites spoofed x-forwarded-for with the relay-authenticated visitor address', async () => {
+  const res = await requestViaTunnel(relayPort, TUNNEL_ID, {
+    path: '/forwarded-for',
+    headers: { 'X-Forwarded-For': '127.0.0.1', 'CF-Connecting-IP': '203.0.113.42' },
+  });
+  expect(res.status).toBe(200);
+  expect(res.body).toBe('203.0.113.42');
 });
 
 test('returns 404 from the origin through the tunnel', async () => {

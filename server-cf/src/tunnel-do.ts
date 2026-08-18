@@ -120,6 +120,18 @@ function headersToObject(headers: Headers): Record<string, string> {
   return out;
 }
 
+/** Prepare visitor headers for the local origin. Never trust a visitor-supplied
+ * X-Forwarded-For value: Cloudflare's edge-authenticated CF-Connecting-IP is the
+ * authority. A fail-closed non-loopback sentinel prevents downstream apps from
+ * mistaking a proxied request for a localhost caller when that header is absent
+ * in local/self-hosted relay environments. */
+function forwardedRequestHeaders(request: Request): Record<string, string> {
+  const out = stripAuthCookie(headersToObject(request.headers));
+  delete out['x-forwarded-for'];
+  out['x-forwarded-for'] = request.headers.get('cf-connecting-ip') || '0.0.0.0';
+  return out;
+}
+
 /**
  * Clamp a WebSocket close reason to 123 UTF-8 bytes (a control frame's reason is
  * capped at 125 bytes minus the 2-byte code). close() throws RangeError otherwise
@@ -592,7 +604,7 @@ export class TunnelDO extends DurableObject<Env> {
     }
 
     const forwardPath = stripTokenParam(url.pathname + url.search);
-    const forwardHeaders = stripAuthCookie(headersToObject(request.headers));
+    const forwardHeaders = forwardedRequestHeaders(request);
     const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
     const bodyBytes = hasBody ? new Uint8Array(await request.arrayBuffer()) : null;
 
@@ -687,7 +699,7 @@ export class TunnelDO extends DurableObject<Env> {
     this.ctx.acceptWebSocket(server, ['browser', `c:${connId}`]);
 
     const cleanPath = stripTokenParam(url.pathname + url.search);
-    const forwardHeaders = stripAuthCookie(headersToObject(request.headers));
+    const forwardHeaders = forwardedRequestHeaders(request);
 
     // Await ws-ready BEFORE returning 101 — so the browser's socket only opens
     // once the local end is connected. This removes the message-buffering dance a single-process relay needs (it can't delay its upgrade).
@@ -967,7 +979,9 @@ export class TunnelDO extends DurableObject<Env> {
         const message =
           reason === 'reservationCap'
             ? `Tunnel rejected: reservation capacity ${auth?.reservedTunnels?.length ?? 0}/${auth?.reservedMax ?? 0}. Reserved ids: ${auth?.reservedTunnels?.join(', ') || 'none'}. Run "volter-tunnel reservations" to inspect or "volter-tunnel release <id>" to free one.`
-            : `Tunnel rejected: ${reason}`;
+            : reason === 'badToken'
+              ? 'Tunnel rejected: credential is invalid or revoked. On an owner-authenticated device, run "volter-tunnel tokens" and restore this host token, or sign in again on the host.'
+              : `Tunnel rejected: ${reason}`;
         sendFrame(ws, { type: 'error', message });
         ws.close(code, reason);
         return;

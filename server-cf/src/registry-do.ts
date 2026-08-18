@@ -315,6 +315,26 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       return json({ slug: who.slug, name: dir.name, usage: await this.accountUsage(who.slug) });
     }
 
+    // Self-service device credentials. A GitHub-backed api token is account
+    // authority: it may inspect metadata (never hashes/plaintext), revoke a
+    // device token, or deliberately restore one that an earlier login
+    // auto-rotated. This is the recovery path for a persistent host whose token
+    // was invalidated by the pre-2.0.4 single-login policy.
+    if (parts[0] === 'me' && parts[1] === 'tokens') {
+      const who = await this.resolveAccountToken(request);
+      if (!who) return json({ error: 'unauthorized' }, 401);
+      const dir = this.accounts.get(who.slug);
+      if (!dir || dir.status !== 'active') return json({ error: 'account suspended' }, 403);
+
+      const tokenId = parts[2];
+      const action = parts[3];
+      if (!tokenId && request.method === 'GET') return this.listOwnTokens(who.slug, request);
+      if (!tokenId || (action && action !== 'restore')) return json({ error: 'not found' }, 404);
+      if (request.method === 'DELETE' && !action) return this.revokeOwnToken(who.slug, tokenId);
+      if (request.method === 'POST' && action === 'restore') return this.restoreOwnToken(who.slug, tokenId);
+      return json({ error: 'method not allowed' }, 405);
+    }
+
     // Self-service reservation release. The account token proves the caller,
     // AccountDO proves current ownership, and TunnelDO rechecks the expected
     // owner atomically before clearing anything so a reclaim race cannot revoke
@@ -480,9 +500,13 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     return this.env.SIGNUP_OPEN === 'true' || this.env.SIGNUP_OPEN === '1';
   }
 
-  /** Resolve a verified GitHub identity to an account + a fresh CLI api token.
-   *  Logging in again rotates the prior github-cli token so creds don't pile up. */
-  private async finalizeSignup(githubId: number, login: string): Promise<Response> {
+  /** Resolve a verified GitHub identity to an account + a fresh device api token.
+   *
+   * A login token is also a tunnel credential. Never rotate another device's
+   * token here: doing so silently takes persistent hosts offline the next time
+   * their control socket reconnects. Owners can inspect, revoke, and restore
+   * their own device tokens through /me/tokens instead. */
+  private async finalizeSignup(githubId: number, login: string, device?: string): Promise<Response> {
     if (!this.signupAllowed(login)) {
       return json({ error: `signup not permitted for github:${login}` }, 403);
     }
@@ -490,15 +514,11 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     if (!(await this.provisionAccount(slug, `github:${login}`))) {
       return json({ error: 'at capacity — global ceiling reached' }, 503);
     }
-    let rotated = false;
-    for (const rec of this.tokens.values()) {
-      if (rec.slug === slug && rec.kind === 'api' && rec.label === 'github-cli' && !rec.revokedAt) {
-        rec.revokedAt = new Date().toISOString();
-        rotated = true;
-      }
-    }
-    if (rotated) await this.persistTokens();
-    const minted = await this.mint(slug, 'api', 'github-cli');
+    const cleanDevice = String(device ?? '')
+      .trim()
+      .replace(/[^a-zA-Z0-9 ._()-]/g, '')
+      .slice(0, 80);
+    const minted = await this.mint(slug, 'api', cleanDevice ? `github-cli:${cleanDevice}` : 'github-cli');
     await this.pushConfig(slug);
     return json({ slug, login, token: minted.token }, 200);
   }
@@ -508,7 +528,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     if (!token) return json({ error: 'missing token' }, 400);
     const user = await this.githubUser(token);
     if (!user) return json({ error: 'github verification failed' }, 401);
-    return this.finalizeSignup(user.id, user.login);
+    return this.finalizeSignup(user.id, user.login, String(body.device ?? ''));
   }
 
   // ── gist-proof signup: prove GitHub ownership without sending us any token ─────
@@ -587,7 +607,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       }
     }
     if (!matched) return json({ error: 'verification failed' }, 401);
-    return this.finalizeSignup(owner.id, owner.login);
+    return this.finalizeSignup(owner.id, owner.login, String(body.device ?? ''));
   }
 
   // ── abuse controls (#3) ──────────────────────────────────────────────────────
@@ -766,6 +786,49 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
         revokedAt: r.revokedAt,
       }));
     return json({ tokens: out });
+  }
+
+  /** Owner-safe token metadata. Includes revoked device tokens so an owner can
+   *  identify and recover a persistent host after accidental login rotation. */
+  private async listOwnTokens(slug: string, request: Request): Promise<Response> {
+    const bearer = this.bearer(request) ?? '';
+    const callerHash = bearer ? await hashToken(bearer) : '';
+    const tokens = [...this.tokens.values()]
+      .filter((r) => r.slug === slug && r.kind === 'api')
+      .map((r) => ({
+        id: r.id,
+        last4: r.last4,
+        label: r.label,
+        createdAt: r.createdAt,
+        revokedAt: r.revokedAt,
+        current: !!callerHash && safeEqualHex(r.hash, callerHash),
+      }))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return json({ tokens });
+  }
+
+  private async revokeOwnToken(slug: string, tokenId: string): Promise<Response> {
+    const rec = this.tokens.get(tokenId);
+    if (!rec || rec.slug !== slug || rec.kind !== 'api') return json({ error: 'no such device token' }, 404);
+    if (!rec.revokedAt) {
+      rec.revokedAt = new Date().toISOString();
+      this.tokens.set(tokenId, rec);
+      await this.persistTokens();
+      await this.pushConfig(slug);
+    }
+    return json({ ok: true, id: tokenId, revokedAt: rec.revokedAt });
+  }
+
+  private async restoreOwnToken(slug: string, tokenId: string): Promise<Response> {
+    const rec = this.tokens.get(tokenId);
+    if (!rec || rec.slug !== slug || rec.kind !== 'api') return json({ error: 'no such device token' }, 404);
+    if (rec.revokedAt) {
+      rec.revokedAt = null;
+      this.tokens.set(tokenId, rec);
+      await this.persistTokens();
+      await this.pushConfig(slug);
+    }
+    return json({ ok: true, id: tokenId, restored: true, last4: rec.last4, label: rec.label });
   }
 
   private async revokeToken(auth: Auth, slug: string, tokenId: string): Promise<Response> {

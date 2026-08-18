@@ -40,6 +40,9 @@ function stubClient(): { client: VolterClient; calls: Call[] } {
     waitlist: rec('waitlist', { waitlist: [] }),
     revokeReservation: rec('revokeReservation', { ok: true }),
     releaseReservation: rec('releaseReservation', { ok: true }),
+    listDeviceTokens: rec('listDeviceTokens', { tokens: [{ id: 'host-1', last4: 'aB3x' }] }),
+    restoreDeviceToken: rec('restoreDeviceToken', { ok: true, restored: true }),
+    revokeDeviceToken: rec('revokeDeviceToken', { ok: true }),
   } as unknown as VolterClient;
   return { client, calls };
 }
@@ -59,6 +62,9 @@ describe('buildTools', () => {
       'usage',
       'reservations',
       'release_reservation',
+      'tokens',
+      'restore_token',
+      'revoke_token',
       'account_list',
       'account_usage',
       'account_create',
@@ -89,6 +95,18 @@ describe('buildTools', () => {
     });
     await byName(tools, 'release_reservation').run({ tunnelId: 'app' });
     expect(calls).toContainEqual({ method: 'releaseReservation', args: ['app'] });
+  });
+
+  test('self-service device-token tools list, restore, and revoke selected credentials', async () => {
+    const { client, calls } = stubClient();
+    const tools = buildTools(client);
+    expect(JSON.parse(await byName(tools, 'tokens').run({}))).toEqual({
+      tokens: [{ id: 'host-1', last4: 'aB3x' }],
+    });
+    await byName(tools, 'restore_token').run({ tokenId: 'host-1' });
+    await byName(tools, 'revoke_token').run({ tokenId: 'host-1' });
+    expect(calls).toContainEqual({ method: 'restoreDeviceToken', args: ['host-1'] });
+    expect(calls).toContainEqual({ method: 'revokeDeviceToken', args: ['host-1'] });
   });
 
   test('account_usage passes the slug through', async () => {

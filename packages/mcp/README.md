@@ -32,7 +32,8 @@ Example client config (Claude Desktop / any MCP host):
 
 ## Tools
 
-`whoami`, `usage`, `reservations`, `release_reservation`, `account_list`, `account_usage`, `account_create`,
+`whoami`, `usage`, `reservations`, `release_reservation`, `tokens`,
+`restore_token`, `revoke_token`, `account_list`, `account_usage`, `account_create`,
 `account_limits`, `account_suspend`, `account_resume`, `reports`, `waitlist`,
 `revoke_reservation`.
 

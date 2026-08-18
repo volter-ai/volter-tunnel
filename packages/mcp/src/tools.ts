@@ -65,6 +65,24 @@ export function buildTools(client: VolterClient): ToolSpec[] {
       run: async (a) => pretty(await client.releaseReservation(String(a.tunnelId))),
     },
     {
+      name: 'tokens',
+      description: "List the caller's device-token metadata without exposing secrets or hashes.",
+      inputSchema: {},
+      run: async () => pretty(await client.listDeviceTokens()),
+    },
+    {
+      name: 'restore_token',
+      description: 'Restore a selected device token invalidated by an earlier login.',
+      inputSchema: { tokenId: z.string().describe('Device token id from the tokens tool') },
+      run: async (a) => pretty(await client.restoreDeviceToken(String(a.tokenId))),
+    },
+    {
+      name: 'revoke_token',
+      description: 'Revoke a selected device token owned by the caller.',
+      inputSchema: { tokenId: z.string().describe('Device token id from the tokens tool') },
+      run: async (a) => pretty(await client.revokeDeviceToken(String(a.tokenId))),
+    },
+    {
       name: 'account_list',
       description: 'List all accounts with their usage and dollar spend (root).',
       inputSchema: {},

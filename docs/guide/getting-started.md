@@ -21,7 +21,9 @@ volter-tunnel --port 3000 --tunnel-id my-app      # → https://my-app.your-rela
 
 - `login` authenticates against a relay and saves an api token to
   `~/.config/volter/token`. Use `--gist` if you'd rather prove your identity via
-  a GitHub gist and send the relay no token at all.
+  a GitHub gist and send the relay no token at all. Each device receives an
+  independent credential, so signing in elsewhere does not disconnect a
+  persistent host.
 - The run command prints the public URL and a scannable QR code. Reconnecting
   with the same `--tunnel-id` gives you back the same URL.
 

@@ -277,6 +277,32 @@ export function buildResponseHeaders(
   if (rules?.remove) for (const k of rules.remove) delete headers[k];
   if (rules?.set) for (const [k, v] of Object.entries(rules.set)) headers[k] = v;
 
+  // Tunnel responses are dynamic and frequently authenticated. Make caching an
+  // explicit opt-in: only a downstream response that clearly says `public` may
+  // be stored. This defeats zone/cache-rule mistakes that key an authenticated
+  // `/api` response only by path while preserving immutable hashed assets.
+  const cacheControl = (headers['cache-control'] ?? '').toLowerCase();
+  const explicitlyPublic =
+    /(?:^|,)\s*public(?:\s|,|$)/.test(cacheControl) &&
+    !/(?:^|,)\s*(?:private|no-store|no-cache)(?:\s|,|=|$)/.test(cacheControl);
+  const pathname = new URL(request.url).pathname;
+  if (!explicitlyPublic || pathname === '/api' || pathname.startsWith('/api/')) {
+    headers['cache-control'] = 'private, no-store, max-age=0';
+    // Cloudflare-CDN-Cache-Control is the provider-specific override; the
+    // standards-track CDN-Cache-Control protects other relay deployments too.
+    headers['cloudflare-cdn-cache-control'] = 'no-store';
+    headers['cdn-cache-control'] = 'no-store';
+    const vary = new Set(
+      (headers.vary ?? '')
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean)
+    );
+    vary.add('Cookie');
+    vary.add('Authorization');
+    headers.vary = [...vary].join(', ');
+  }
+
   const out = new Headers();
   for (const [k, v] of Object.entries(headers)) {
     if (v != null) out.set(k, v);

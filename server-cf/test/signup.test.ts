@@ -48,9 +48,7 @@ function startStub(port: number): Promise<void> {
     }
     if (url.pathname.startsWith('/gists/')) {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(
-        JSON.stringify({ owner: { id: 7777, login: 'gistuser' }, files: { 'v.txt': { content: gistContent } } })
-      );
+      res.end(JSON.stringify({ owner: { id: 7777, login: 'gistuser' }, files: { 'v.txt': { content: gistContent } } }));
       return;
     }
     res.writeHead(404);
@@ -246,13 +244,46 @@ describe('self-service /me (api token reads its own account + usage)', () => {
     expect(resumed.status).toBe(200);
   }, 20000);
 
-  test('GET /me with a revoked token is 401 (logging in again rotates the prior token)', async () => {
+  test('logging in on another device does not revoke a persistent host token', async () => {
     const first = await post(port, '/signup/github', { token: 'good-token' });
     const oldToken = first.json.token as string;
-    await post(port, '/signup/github', { token: 'good-token' }); // rotates oldToken
+    await post(port, '/signup/github', { token: 'good-token', device: 'operator-laptop' });
     const res = await get(port, '/me', { authorization: `Bearer ${oldToken}` });
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(200);
   }, 20000);
+
+  test('owner can inspect, revoke, and restore a selected device token', async () => {
+    const host = await post(port, '/signup/github', { token: 'good-token', device: 'rh2-host' });
+    const hostToken = host.json.token as string;
+    const owner = await post(port, '/signup/github', { token: 'good-token', device: 'operator-laptop' });
+    const ownerToken = owner.json.token as string;
+
+    const listed = await get(port, '/me/tokens', { authorization: `Bearer ${ownerToken}` });
+    expect(listed.status).toBe(200);
+    const tokens = (JSON.parse(listed.body) as { tokens: Array<Record<string, unknown>> }).tokens;
+    const hostMeta = tokens.find((t) => t.last4 === hostToken.slice(-4));
+    expect(hostMeta?.label).toBe('github-cli:rh2-host');
+    expect(hostMeta?.current).toBe(false);
+    expect(tokens.find((t) => t.last4 === ownerToken.slice(-4))?.current).toBe(true);
+
+    const revoked = await del(port, `/me/tokens/${hostMeta?.id}`, {
+      authorization: `Bearer ${ownerToken}`,
+    });
+    expect(revoked.status).toBe(200);
+    expect((await rawRegister(port, 'restorable-host', hostToken)).ok).toBe(false);
+
+    const restored = await post(
+      port,
+      `/me/tokens/${hostMeta?.id}/restore`,
+      {},
+      {
+        authorization: `Bearer ${ownerToken}`,
+      }
+    );
+    expect(restored.status).toBe(200);
+    expect(restored.json.restored).toBe(true);
+    expect((await rawRegister(port, 'restorable-host', hostToken)).ok).toBe(true);
+  }, 30000);
 });
 
 describe('GitHub token-exchange signup', () => {
@@ -279,7 +310,7 @@ describe('GitHub token-exchange signup', () => {
     expect(res.status).toBe(403);
   });
 
-  test('logging in again rotates to a fresh token, same account', async () => {
+  test('logging in again creates a fresh device token for the same account', async () => {
     const res = await post(port, '/signup/github', { token: 'good-token' });
     expect(res.status).toBe(200);
     expect(res.json.slug).toBe('gh-4242');
@@ -386,7 +417,9 @@ describe('public front door (landing + docs + waitlist)', () => {
     expect(res.json.alreadyAllowed).toBeUndefined();
 
     // It shows up for the operator (root).
-    const list = await get(port, '/admin/waitlist', { authorization: 'Bearer vtr_TESTROOT0000000000000000000000000000000' });
+    const list = await get(port, '/admin/waitlist', {
+      authorization: 'Bearer vtr_TESTROOT0000000000000000000000000000000',
+    });
     expect(list.status).toBe(200);
     const wl = JSON.parse(list.body).waitlist as Array<{ githubUser: string; email: string }>;
     expect(wl.some((w) => w.githubUser === 'newdev' && w.email === 'newdev@example.com')).toBe(true);
@@ -406,7 +439,9 @@ describe('public front door (landing + docs + waitlist)', () => {
   test('re-submitting the same username dedups (latest wins, no duplicate row)', async () => {
     await post(port, '/waitlist', { githubUser: 'dupedev', useCase: 'first' });
     await post(port, '/waitlist', { githubUser: 'DupeDev', useCase: 'second' });
-    const list = await get(port, '/admin/waitlist', { authorization: 'Bearer vtr_TESTROOT0000000000000000000000000000000' });
+    const list = await get(port, '/admin/waitlist', {
+      authorization: 'Bearer vtr_TESTROOT0000000000000000000000000000000',
+    });
     const wl = JSON.parse(list.body).waitlist as Array<{ githubUser: string; useCase: string }>;
     const rows = wl.filter((w) => w.githubUser.toLowerCase() === 'dupedev');
     expect(rows.length).toBe(1);

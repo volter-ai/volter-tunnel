@@ -4,7 +4,15 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { VolterClient } from '../client/api.ts';
-import { runAccount, runReleaseReservation, runReservations, runUsage, runWhoami } from '../client/cli.ts';
+import {
+  runAccount,
+  runReleaseReservation,
+  runReservations,
+  runTokenAction,
+  runTokens,
+  runUsage,
+  runWhoami,
+} from '../client/cli.ts';
 
 const usage = {
   slug: 'gh-1',
@@ -36,6 +44,20 @@ function stub(): { client: VolterClient; calls: Call[] } {
     patchLimits: rec('patchLimits', { ok: true }),
     setStatus: rec('setStatus', { ok: true }),
     releaseReservation: rec('releaseReservation', { ok: true, revoked: true }),
+    listDeviceTokens: rec('listDeviceTokens', {
+      tokens: [
+        {
+          id: 'host-1',
+          last4: 'aB3x',
+          label: 'github-cli:rh2-host',
+          createdAt: '2026-08-18T12:00:00Z',
+          revokedAt: '2026-08-18T13:00:00Z',
+          current: false,
+        },
+      ],
+    }),
+    restoreDeviceToken: rec('restoreDeviceToken', { ok: true, restored: true }),
+    revokeDeviceToken: rec('revokeDeviceToken', { ok: true }),
   } as unknown as VolterClient;
   return { client, calls };
 }
@@ -61,6 +83,16 @@ describe('runWhoami / runUsage', () => {
     await runReleaseReservation(client, 'app');
     expect(calls).toContainEqual({ method: 'releaseReservation', args: ['app'] });
     await expect(runReleaseReservation(client, undefined)).rejects.toThrow(/Usage:/);
+  });
+  test('tokens renders safe metadata and token actions delegate to the SDK', async () => {
+    const { client, calls } = stub();
+    expect(await runTokens(client)).toContain('host-1  …aB3x  revoked');
+    expect(JSON.parse(await runTokens(client, true)).tokens[0].label).toBe('github-cli:rh2-host');
+    await runTokenAction(client, 'restore', 'host-1');
+    await runTokenAction(client, 'revoke', 'host-1');
+    expect(calls).toContainEqual({ method: 'restoreDeviceToken', args: ['host-1'] });
+    expect(calls).toContainEqual({ method: 'revokeDeviceToken', args: ['host-1'] });
+    await expect(runTokenAction(client, 'bogus', 'host-1')).rejects.toThrow(/Usage:/);
   });
 });
 

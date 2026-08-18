@@ -14,7 +14,8 @@ VOLTER_TOKEN=<token> \
 ```
 
 - `VOLTER_TOKEN` is an **api/login token** for the self-service tools (`whoami`,
-  `usage`), or the **root token** (`vtr_…`) to enable the admin tools.
+  `usage`, reservation, and device-token recovery tools), or the **root token**
+  (`vtr_…`) to enable the admin tools.
 - `VOLTER_HOST` defaults to `https://voltertest.xyz`.
 
 ## Client config
@@ -35,7 +36,8 @@ Example for an MCP host (e.g. Claude Desktop):
 
 ## Tools
 
-`whoami`, `usage`, `account_list`, `account_usage`, `account_create`,
+`whoami`, `usage`, `reservations`, `release_reservation`, `tokens`,
+`restore_token`, `revoke_token`, `account_list`, `account_usage`, `account_create`,
 `account_limits`, `account_suspend`, `account_resume`, `reports`, `waitlist`,
 `revoke_reservation`.
 

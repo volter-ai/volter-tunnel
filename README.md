@@ -36,6 +36,8 @@ volter-tunnel whoami                                  # your account + usage
 volter-tunnel usage [--json]                          # your current spend (today / month)
 volter-tunnel reservations [--json]                   # your stable ids + capacity
 volter-tunnel release <tunnel-id>                     # release one of your stable ids
+volter-tunnel tokens [--json]                         # device credentials (metadata only)
+volter-tunnel token <restore|revoke> <token-id>       # recover or retire one device
 volter-tunnel account <list|usage|create|limits|suspend|resume> [slug] \
   [--day-usd N] [--month-usd N]                       # admin ops (needs the root token)
 ```
@@ -66,13 +68,16 @@ import { VolterClient } from '@volter/tunnel/client';
 const client = new VolterClient({ host: 'https://your-relay', token });
 const me = await client.whoami();          // { slug, name, usage }
 await client.releaseReservation('old-app');           // self-service; own ids only
+await client.listDeviceTokens();                      // safe metadata; no secrets/hashes
+await client.restoreDeviceToken('host-token-id');     // recover a selected host credential
 await client.createAccount({ slug: 'x', dayUsd: 10 });   // root token
 ```
 
 ## MCP server (for AI agents)
 
 `@volter/tunnel-mcp` exposes account/usage/abuse operations as MCP tools
-(`whoami`, `usage`, `account_*`, `reports`, `waitlist`, `revoke_reservation`):
+(`whoami`, `usage`, reservation and device-token self-service, `account_*`,
+`reports`, `waitlist`, `revoke_reservation`):
 
 ```bash
 VOLTER_HOST=https://your-relay VOLTER_TOKEN=<token> bunx @volter/tunnel-mcp
