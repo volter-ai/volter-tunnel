@@ -78,4 +78,35 @@ describe('createTunnel reconnect', () => {
     await sleep(1500); // would-be backoff window
     expect(connections).toBe(1); // never registered → no retry
   }, 15000);
+
+  test('stops retrying when an established tunnel receives a fatal rejection', async () => {
+    const port = await freePort();
+    let connections = 0;
+    const wss = new WebSocketServer({ port, path: '/ws' });
+    cleanups.push(() => wss.close());
+    wss.on('connection', (ws) => {
+      connections += 1;
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type !== 'register') return;
+        ws.send(JSON.stringify({ type: 'registered', tunnelId: msg.tunnelId ?? 't', url: 'http://example' }));
+        setTimeout(() => {
+          ws.send(JSON.stringify({ type: 'error', fatal: true, message: 'newer device owns tunnel' }));
+          ws.close(4002, 'Newer device owns tunnel');
+        }, 20);
+      });
+    });
+
+    const tunnel = await createTunnel({
+      port: 1,
+      host: `http://127.0.0.1:${port}`,
+      tunnelId: 't',
+      authRequired: false,
+      logger: NO_LOG,
+    });
+    cleanups.push(() => tunnel.close());
+
+    await sleep(1500);
+    expect(connections).toBe(1);
+  }, 15000);
 });

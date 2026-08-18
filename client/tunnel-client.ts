@@ -120,6 +120,7 @@ export function createTunnel({
 
       if (msg.type === 'error') {
         clearTimeout(timeout);
+        if (msg.fatal) closed = true;
         if (onFirstError) {
           onFirstError(new Error(`Tunnel server rejected connection: ${msg.message}`));
           onFirstError = null;

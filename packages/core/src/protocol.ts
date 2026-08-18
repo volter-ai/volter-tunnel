@@ -116,6 +116,8 @@ export interface QuotaMsg {
 export interface ErrorMsg {
   type: 'error';
   message: string;
+  /** The client must not reconnect this control session without operator action. */
+  fatal?: boolean;
 }
 
 // ── bidirectional (same shape both ways) ──────────────────────────────────────
