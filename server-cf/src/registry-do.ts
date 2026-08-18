@@ -459,13 +459,15 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
   ): { ok: true; id: string; createdAt: string } | { ok: false } {
     const slug = String(body.slug ?? '');
     const hash = String(body.tokenHash ?? '');
-    if (!this.accounts.has(slug) || hash.length === 0) return { ok: false };
+    const credentialId = String(body.credentialId ?? '');
+    if (!this.accounts.has(slug) || (hash.length === 0 && credentialId.length === 0)) return { ok: false };
     const token = [...this.tokens.values()].find(
       (candidate) =>
         candidate.slug === slug &&
         candidate.kind === 'api' &&
         candidate.revokedAt === null &&
-        safeEqualHex(candidate.hash, hash)
+        ((credentialId.length > 0 && candidate.id === credentialId) ||
+          (hash.length > 0 && safeEqualHex(candidate.hash, hash)))
     );
     return token === undefined ? { ok: false } : { createdAt: token.createdAt, id: token.id, ok: true };
   }
