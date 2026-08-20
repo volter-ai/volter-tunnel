@@ -910,7 +910,7 @@ describe('robustness regressions', () => {
 
   test('register-replace does not throttle the surviving tunnel (regId race)', async () => {
     const id = 'race-t';
-    const reg = (ws: WebSocket, replace: boolean) =>
+    const reg = (ws: WebSocket, replace: boolean, body: string) =>
       new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('no registered')), 8000);
         ws.on('open', () =>
@@ -929,7 +929,7 @@ describe('robustness regressions', () => {
                 reqId: msg.reqId,
                 status: 200,
                 headers: {},
-                body: Buffer.from('survivor').toString('base64'),
+                body: Buffer.from(body).toString('base64'),
               })
             );
           }
@@ -938,22 +938,26 @@ describe('robustness regressions', () => {
       });
 
     const a = new WebSocket(`ws://127.0.0.1:${port}/ws?id=${id}`);
-    await reg(a, false);
+    const aClosed = new Promise<number>((resolve) => a.on('close', resolve));
+    await reg(a, false, 'predecessor');
     const b = new WebSocket(`ws://127.0.0.1:${port}/ws?id=${id}`); // replaces A, closing it
-    await reg(b, true);
-    await new Promise((r) => setTimeout(r, 600)); // let A's close land (must be a no-op vs B's entry)
+    await reg(b, true, 'successor');
 
-    // The survivor (B) must still serve — its account ledger entry must not have
-    // been clobbered by the replaced socket's close.
-    const r = await reqFull(port, id, '/x');
+    // The successor must own routing immediately, and the predecessor's delayed
+    // close must remain a no-op against its ledger and local relay state.
+    const immediate = await reqFull(port, id, '/immediate');
+    expect(await aClosed).toBe(4001);
+    const afterClose = await reqFull(port, id, '/after-close');
     try {
       a.close();
       b.close();
     } catch {
       /* ignore */
     }
-    expect(r.status).toBe(200);
-    expect(r.body).toBe('survivor');
+    expect(immediate.status).toBe(200);
+    expect(immediate.body).toBe('successor');
+    expect(afterClose.status).toBe(200);
+    expect(afterClose.body).toBe('successor');
   }, 15000);
 
   test('a malformed tunnel response resolves 502, not a 30s hang', async () => {
