@@ -39,6 +39,9 @@ import { sendFrame } from './protocol';
 interface CtlAttach {
   role: 'ctl';
   registered: boolean;
+  /** A connector replaced after the successor was authorized. Its eventual
+   * close must not settle or tear down state now owned by that successor. */
+  superseded?: boolean;
   authRequired: boolean;
   tunnelId: string;
   /** Account this tunnel meters against — set at register, survives hibernation. */
@@ -489,7 +492,8 @@ export class TunnelDO extends DurableObject<Env> {
   // ── control socket helpers ────────────────────────────────────────────────
   private ctl(): WebSocket | null {
     const arr = this.ctx.getWebSockets('ctl');
-    return arr.length ? (arr[0] as WebSocket) : null;
+    const registered = arr.find((ws) => (ws.deserializeAttachment() as CtlAttach | null)?.registered);
+    return (registered ?? arr[0] ?? null) as WebSocket | null;
   }
   private ctlAttach(): CtlAttach | null {
     const ws = this.ctl();
@@ -791,17 +795,22 @@ export class TunnelDO extends DurableObject<Env> {
       return;
     }
 
-    // Control-channel message (responses, chunks, ws relays from the tunnel
-    // client) → count for batch metering (fire-and-forget, so the lease round-trip
-    // never convoys response delivery under concurrency), then dispatch.
-    this.msgsSinceFlush++;
-    if (this.msgsSinceFlush >= MSG_FLUSH_EVERY) void this.flushMessages().catch(() => {});
     let msg: Record<string, unknown>;
     try {
       msg = JSON.parse(typeof data === 'string' ? data : new TextDecoder().decode(data));
     } catch {
       return;
     }
+    // An accepted socket may send only register until it becomes the owner. A
+    // superseded connector can have already-queued frames when its close lands;
+    // ignore them instead of billing or dispatching them as successor traffic.
+    if ((!attach?.registered || attach.superseded) && msg.type !== 'register') return;
+
+    // Control-channel message (responses, chunks, ws relays from the tunnel
+    // client) → count for batch metering (fire-and-forget, so the lease round-trip
+    // never convoys response delivery under concurrency), then dispatch.
+    this.msgsSinceFlush++;
+    if (this.msgsSinceFlush >= MSG_FLUSH_EVERY) void this.flushMessages().catch(() => {});
     await this.onControlMessage(ws, msg);
   }
 
@@ -818,6 +827,12 @@ export class TunnelDO extends DurableObject<Env> {
       }
       return;
     }
+    // Replacement transfers the account lease and the TunnelDO's local metering
+    // state to the successor. The superseded socket's delayed close is therefore
+    // deliberately inert: settling or disconnecting here would clobber traffic
+    // already owned by the new registration.
+    if (attach?.role === 'ctl' && (!attach.registered || attach.superseded)) return;
+
     // Settle metering: commit unflushed usage + tunnel-seconds and return any
     // unconsumed lease to the account (recovers budget stranded by hibernation).
     if (attach?.slug) {
@@ -852,13 +867,15 @@ export class TunnelDO extends DurableObject<Env> {
       }
     }
 
-    // Control socket gone → tear down EVERYTHING for this tunnel (mirrors
-    // close browser relays, fail pending requests/upgrades,
-    // error open streams. Without this, a client disconnect mid-stream leaks hung
-    // browser connections and never-resolving responses.
+    this.disconnectTraffic('Tunnel disconnected');
+  }
+
+  /** Tear down traffic bound to the current connector. Replacement cannot keep
+   * in-flight correlations because their responses belong to the old socket. */
+  private disconnectTraffic(reason: string): void {
     for (const b of this.ctx.getWebSockets('browser')) {
       try {
-        (b as WebSocket).close(1001, 'Tunnel disconnected');
+        (b as WebSocket).close(1001, reason);
       } catch {
         /* ignore */
       }
@@ -867,7 +884,7 @@ export class TunnelDO extends DurableObject<Env> {
       clearTimeout(p.timer);
       this.finishInspect(rid, 502, null);
       try {
-        p.resolve(new Response('Tunnel disconnected', { status: 502 }));
+        p.resolve(new Response(reason, { status: 502 }));
       } catch {
         /* already resolved */
       }
@@ -876,7 +893,7 @@ export class TunnelDO extends DurableObject<Env> {
     for (const [, s] of this.streaming) {
       clearTimeout(s.idle);
       try {
-        s.controller.error(new Error('Tunnel disconnected'));
+        s.controller.error(new Error(reason));
       } catch {
         /* already closed */
       }
@@ -884,7 +901,7 @@ export class TunnelDO extends DurableObject<Env> {
     this.streaming.clear();
     for (const [, p] of this.pendingUpgrades) {
       clearTimeout(p.timer);
-      p.reject(new Error('Tunnel disconnected'));
+      p.reject(new Error(reason));
     }
     this.pendingUpgrades.clear();
   }
@@ -978,6 +995,7 @@ export class TunnelDO extends DurableObject<Env> {
       if (others.length) {
         if (msg.replace) {
           const incomingRank = credential?.ok === true ? `${credential.createdAt}\u0000${credential.id}` : undefined;
+          const incomingCredentialId = credential?.ok === true ? credential.id : undefined;
           let newerOwner: WebSocket | undefined;
           if (incomingRank !== undefined) {
             for (const candidate of others) {
@@ -985,7 +1003,7 @@ export class TunnelDO extends DurableObject<Env> {
               if (
                 attached?.credentialId === undefined ||
                 attached.credentialCreatedAt === undefined ||
-                attached.credentialId === credential.id ||
+                attached.credentialId === incomingCredentialId ||
                 `${attached.credentialCreatedAt}\u0000${attached.credentialId}` <= incomingRank
               )
                 continue;
@@ -1008,7 +1026,6 @@ export class TunnelDO extends DurableObject<Env> {
             ws.close(4002, 'Newer device owns tunnel');
             return;
           }
-          for (const w of others) (w as WebSocket).close(4001, 'Replaced by new client');
         } else {
           sendFrame(ws, {
             type: 'error',
@@ -1027,6 +1044,14 @@ export class TunnelDO extends DurableObject<Env> {
       // Unique registration nonce — lets the account tell this socket's ledger
       // entry apart from a later replacement's (fixes the replace race).
       const regId = crypto.randomUUID();
+      const authRequired = msg.authRequired !== false;
+      const ba = msg.basicAuth as { user?: string; pass?: string } | undefined;
+      const basicAuthHash = ba?.user && ba.pass ? await hashToken(`${ba.user}:${ba.pass}`) : undefined;
+      let openedAt = Date.now();
+      for (const old of others) {
+        const oldAttach = old.deserializeAttachment() as CtlAttach;
+        if (oldAttach.openedAt !== undefined) openedAt = Math.min(openedAt, oldAttach.openedAt);
+      }
 
       // Authorize against the account: valid token, active, under the concurrent
       // cap, and with budget remaining. A rejection closes the control socket.
@@ -1051,6 +1076,34 @@ export class TunnelDO extends DurableObject<Env> {
         return;
       }
 
+      // The account now recognizes regId as the owner. Transfer the live relay
+      // state before the next await: mark predecessors inert first, fail their
+      // in-flight traffic, then publish the successor as registered. Visitors
+      // therefore cannot observe the account's new regId while ctl() still
+      // selects an old registration.
+      if (others.length) {
+        for (const old of others) {
+          const oldAttach = old.deserializeAttachment() as CtlAttach;
+          old.serializeAttachment({ ...oldAttach, registered: false, superseded: true } satisfies CtlAttach);
+        }
+        this.disconnectTraffic('Tunnel replaced');
+        for (const old of others) (old as WebSocket).close(4001, 'Replaced by new client');
+      }
+      ws.serializeAttachment({
+        role: 'ctl',
+        registered: true,
+        authRequired,
+        tunnelId,
+        slug,
+        leaseChunk: auth.leaseChunk ?? 50,
+        openedAt,
+        regId,
+        legacy,
+        tokenHash,
+        ...(credential?.ok === true ? { credentialCreatedAt: credential.createdAt, credentialId: credential.id } : {}),
+        basicAuthHash,
+      } satisfies CtlAttach);
+
       // Account is authorized → claim/refresh/reclaim this tunnelId for it and
       // (re)start the idle clock. Same write for all three verdicts (the only
       // rejected case already returned above).
@@ -1066,23 +1119,6 @@ export class TunnelDO extends DurableObject<Env> {
         await this.accountRpc('/release-id', { tunnelId }, reservation.ownerSlug);
       }
 
-      const authRequired = msg.authRequired !== false;
-      const ba = msg.basicAuth as { user?: string; pass?: string } | undefined;
-      const basicAuthHash = ba?.user && ba.pass ? await hashToken(`${ba.user}:${ba.pass}`) : undefined;
-      ws.serializeAttachment({
-        role: 'ctl',
-        registered: true,
-        authRequired,
-        tunnelId,
-        slug,
-        leaseChunk: auth.leaseChunk ?? 50,
-        openedAt: Date.now(),
-        regId,
-        legacy,
-        tokenHash,
-        ...(credential?.ok === true ? { credentialCreatedAt: credential.createdAt, credentialId: credential.id } : {}),
-        basicAuthHash,
-      } satisfies CtlAttach);
       // Seed the rate snapshot + quota level so headers work from the first
       // request and we don't re-announce the level the client already sees.
       this.rate = auth.rate ?? null;
