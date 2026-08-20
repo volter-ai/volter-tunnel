@@ -1,0 +1,69 @@
+name: Update relay account limits
+
+on:
+  workflow_dispatch:
+    inputs:
+      account_slug:
+        description: Relay account slug
+        required: true
+        type: string
+      reserved_max:
+        description: Maximum stable tunnel reservations
+        required: true
+        type: string
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Validate requested limits
+        env:
+          ACCOUNT_SLUG: ${{ inputs.account_slug }}
+          RESERVED_MAX: ${{ inputs.reserved_max }}
+        run: |
+          if ! [[ "$ACCOUNT_SLUG" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
+            echo "account_slug must be a lowercase DNS-style label" >&2
+            exit 1
+          fi
+          if ! [[ "$RESERVED_MAX" =~ ^[0-9]+$ ]] || (( RESERVED_MAX < 1 || RESERVED_MAX > 100 )); then
+            echo "reserved_max must be an integer from 1 through 100" >&2
+            exit 1
+          fi
+      - name: Rotate root authority and update the account
+        env:
+          ACCOUNT_SLUG: ${{ inputs.account_slug }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RESERVED_MAX: ${{ inputs.reserved_max }}
+        run: |
+          root_token="vtr_$(openssl rand -hex 32)"
+          echo "::add-mask::$root_token"
+          printf '%s' "$root_token" | bunx wrangler secret put ROOT_TOKEN --config server-cf/wrangler.jsonc
+
+          response=""
+          for attempt in 1 2 3 4 5; do
+            response="$(curl --silent --show-error --fail-with-body \
+              --request PATCH \
+              --header "Authorization: Bearer $root_token" \
+              --header 'content-type: application/json' \
+              --data "{\"reservedMax\":$RESERVED_MAX}" \
+              "https://voltertest.xyz/admin/accounts/$ACCOUNT_SLUG/limits")" && break
+            sleep "$attempt"
+          done
+
+          # JavaScript owns the template literal below.
+          # shellcheck disable=SC2016
+          EXPECTED_SLUG="$ACCOUNT_SLUG" EXPECTED_MAX="$RESERVED_MAX" RESPONSE="$response" node --input-type=module -e '
+            const result = JSON.parse(process.env.RESPONSE ?? "null");
+            if (result?.ok !== true || result?.account?.slug !== process.env.EXPECTED_SLUG || result?.account?.reservedMax !== Number(process.env.EXPECTED_MAX)) {
+              throw new Error("relay did not confirm the requested account limit");
+            }
+            process.stdout.write(`Updated ${result.account.slug} reservedMax to ${result.account.reservedMax}\n`);
+          '
