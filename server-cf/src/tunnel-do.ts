@@ -1156,7 +1156,10 @@ export class TunnelDO extends DurableObject<Env> {
         return;
       }
       this.finishInspect(msg.reqId as string, (msg.status as number) || 200, body ? body.length : 0);
-      pending.resolve(new Response(body, { status: (msg.status as number) || 200, headers }));
+      // Workers strip content-encoding from a constructed Response and assume the
+      // body is decoded; a compressed upstream body then ships headerless and the
+      // consumer reads gzip bytes as text. encodeBody manual passes both through.
+      pending.resolve(new Response(body, { status: (msg.status as number) || 200, headers, ...(headers.has('content-encoding') ? { encodeBody: 'manual' as const } : {}) } as ResponseInit));
       return;
     }
 
@@ -1203,7 +1206,7 @@ export class TunnelDO extends DurableObject<Env> {
           }
         },
       });
-      pending.resolve(new Response(readable, { status, headers }));
+      pending.resolve(new Response(readable, { status, headers, ...(headers.has('content-encoding') ? { encodeBody: 'manual' as const } : {}) } as ResponseInit));
       return;
     }
 
