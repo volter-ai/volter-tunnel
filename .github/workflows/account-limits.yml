@@ -11,6 +11,16 @@ on:
         description: Maximum stable tunnel reservations
         required: true
         type: string
+      day_usd:
+        description: Daily spend cap in dollars (blank keeps the current value)
+        required: false
+        default: ''
+        type: string
+      month_usd:
+        description: Monthly spend cap in dollars (blank keeps the current value)
+        required: false
+        default: ''
+        type: string
 
 jobs:
   update:
@@ -27,6 +37,8 @@ jobs:
         env:
           ACCOUNT_SLUG: ${{ inputs.account_slug }}
           RESERVED_MAX: ${{ inputs.reserved_max }}
+          DAY_USD: ${{ inputs.day_usd }}
+          MONTH_USD: ${{ inputs.month_usd }}
         run: |
           if ! [[ "$ACCOUNT_SLUG" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
             echo "account_slug must be a lowercase DNS-style label" >&2
@@ -36,16 +48,29 @@ jobs:
             echo "reserved_max must be an integer from 1 through 100" >&2
             exit 1
           fi
+          for cap in "$DAY_USD" "$MONTH_USD"; do
+            if [[ -n "$cap" ]] && { ! [[ "$cap" =~ ^[0-9]+$ ]] || (( cap < 1 || cap > 1000 )); }; then
+              echo "day_usd/month_usd must be blank or an integer from 1 through 1000 dollars" >&2
+              exit 1
+            fi
+          done
       - name: Rotate root authority and update the account
         env:
           ACCOUNT_SLUG: ${{ inputs.account_slug }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           RESERVED_MAX: ${{ inputs.reserved_max }}
+          DAY_USD: ${{ inputs.day_usd }}
+          MONTH_USD: ${{ inputs.month_usd }}
         run: |
           root_token="vtr_$(openssl rand -hex 32)"
           echo "::add-mask::$root_token"
           printf '%s' "$root_token" | bunx wrangler secret put ROOT_TOKEN --config server-cf/wrangler.jsonc
+
+          body="{\"reservedMax\":$RESERVED_MAX"
+          [[ -n "$DAY_USD" ]] && body="$body,\"dayUsd\":$DAY_USD"
+          [[ -n "$MONTH_USD" ]] && body="$body,\"monthUsd\":$MONTH_USD"
+          body="$body}"
 
           response=""
           for attempt in 1 2 3 4 5; do
@@ -53,17 +78,22 @@ jobs:
               --request PATCH \
               --header "Authorization: Bearer $root_token" \
               --header 'content-type: application/json' \
-              --data "{\"reservedMax\":$RESERVED_MAX}" \
+              --data "$body" \
               "https://voltertest.xyz/admin/accounts/$ACCOUNT_SLUG/limits")" && break
             sleep "$attempt"
           done
 
           # JavaScript owns the template literal below.
           # shellcheck disable=SC2016
-          EXPECTED_SLUG="$ACCOUNT_SLUG" EXPECTED_MAX="$RESERVED_MAX" RESPONSE="$response" node --input-type=module -e '
+          EXPECTED_SLUG="$ACCOUNT_SLUG" EXPECTED_MAX="$RESERVED_MAX" EXPECTED_DAY_USD="$DAY_USD" EXPECTED_MONTH_USD="$MONTH_USD" RESPONSE="$response" node --input-type=module -e '
             const result = JSON.parse(process.env.RESPONSE ?? "null");
-            if (result?.ok !== true || result?.account?.slug !== process.env.EXPECTED_SLUG || result?.account?.reservedMax !== Number(process.env.EXPECTED_MAX)) {
+            const account = result?.account;
+            if (result?.ok !== true || account?.slug !== process.env.EXPECTED_SLUG || account?.reservedMax !== Number(process.env.EXPECTED_MAX)) {
               throw new Error("relay did not confirm the requested account limit");
             }
-            process.stdout.write(`Updated ${result.account.slug} reservedMax to ${result.account.reservedMax}\n`);
+            // Limits are stored as op-credits at ~$1 per million; confirm the dollar caps that were requested.
+            const usd = (credits) => Math.round(credits / 1_000_000);
+            if (process.env.EXPECTED_DAY_USD && usd(account.dayLimit) !== Number(process.env.EXPECTED_DAY_USD)) throw new Error("relay did not confirm the requested daily cap");
+            if (process.env.EXPECTED_MONTH_USD && usd(account.monthLimit) !== Number(process.env.EXPECTED_MONTH_USD)) throw new Error("relay did not confirm the requested monthly cap");
+            process.stdout.write(`Updated ${account.slug}: reservedMax ${account.reservedMax}, day $${usd(account.dayLimit)}, month $${usd(account.monthLimit)}\n`);
           '
