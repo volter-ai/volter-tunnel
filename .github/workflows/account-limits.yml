@@ -72,8 +72,10 @@ jobs:
           [[ -n "$MONTH_USD" ]] && body="$body,\"monthUsd\":$MONTH_USD"
           body="$body}"
 
+          # A freshly uploaded Worker secret can take tens of seconds to reach every edge,
+          # so 401s right after rotation are expected; keep trying for about two minutes.
           response=""
-          for attempt in 1 2 3 4 5; do
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
             response="$(curl --silent --show-error --fail-with-body \
               --request PATCH \
               --header "Authorization: Bearer $root_token" \
