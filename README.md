@@ -31,6 +31,7 @@ bun add @volter/tunnel        # client library + CLI (runs under Bun)
 
 ```bash
 volter-tunnel login [--gist] [--host <url>]          # prove a GitHub identity, save an api token
+volter-tunnel login --volter [--host <url>]         # sign in with Volter (id.volter.ai), save an api token
 volter-tunnel --port 3000 [--tunnel-id my-app]       # expose a local port; prints the URL (+ QR)
 volter-tunnel whoami                                  # your account + usage
 volter-tunnel usage [--json]                          # your current spend (today / month)

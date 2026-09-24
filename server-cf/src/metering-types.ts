@@ -55,7 +55,8 @@ export interface MeteringEnv {
   /** Free-tier limits applied to a self-provisioned GitHub-signup account. */
   SIGNUP_DAY_LIMIT?: string;
   SIGNUP_MONTH_LIMIT?: string;
-  /** Comma-separated GitHub logins allowed to sign up (#2/#3). Set = only these
+  /** Comma-separated GitHub logins, and verified emails of Volter identities without
+   *  GitHub, allowed to sign up (#2/#3). Set = only these
    *  may self-provision. Unset/empty = closed unless SIGNUP_OPEN is set. */
   SIGNUP_ALLOWED_USERS?: string;
   /** 'true'/'1' opens signup to everyone when no allowlist is configured. Without

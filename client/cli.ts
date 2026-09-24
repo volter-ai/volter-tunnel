@@ -36,7 +36,8 @@ function readSavedToken(): string | undefined {
 /**
  * `volter-tunnel login` — prove who you are to the relay and save the api token
  * it mints. With --volter, a Volter sign-in (id.volter.ai) by the device grant;
- * the account is the Volter identity's linked GitHub account. Or, via the
+ * the account is the Volter identity's linked GitHub account, or without one the
+ * identity's own account. Or, via the
  * existing GitHub setup (no OAuth app):
  *   - token (default): send the `gh auth token` to the relay, which verifies it
  *     via the GitHub API and discards it. Override with --token <t>.
@@ -82,7 +83,7 @@ async function runLogin(opts: { host: string; method: 'token' | 'gist' | 'volter
   const file = tokenFilePath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, String(resp.token), { mode: 0o600 });
-  console.error(`Logged in as github:${resp.login} (account ${resp.slug}).`);
+  console.error(`Logged in as ${resp.name ?? `github:${resp.login}`} (account ${resp.slug}).`);
   console.error(`Saved api token to ${file} — future 'volter-tunnel' runs use it automatically.`);
   console.error('Login complete. The credential was saved locally and will not be printed.');
 }

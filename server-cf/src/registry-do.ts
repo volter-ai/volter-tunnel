@@ -519,9 +519,9 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     return true;
   }
 
-  /** Whether a GitHub login may sign up. Empty/unset allowlist = open signup;
-   *  a set allowlist restricts to those logins (case-insensitive). Gates account
-   *  creation only — existing secrets/tokens are unaffected. */
+  /** Whether a person may sign up: a GitHub login, or for a Volter identity without GitHub its verified email.
+   *  Empty/unset allowlist = open signup when SIGNUP_OPEN; a set allowlist restricts to the logins and email
+   *  addresses it names (case-insensitive). Gates account creation only — existing secrets/tokens are unaffected. */
   private signupAllowed(login: string): boolean {
     const allow = (this.env.SIGNUP_ALLOWED_USERS ?? '')
       .split(',')
@@ -543,8 +543,12 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     if (!this.signupAllowed(login)) {
       return json({ error: `signup not permitted for github:${login}` }, 403);
     }
-    const slug = `gh-${githubId}`;
-    if (!(await this.provisionAccount(slug, `github:${login}`))) {
+    return this.mintSignup(`gh-${githubId}`, `github:${login}`, login, device);
+  }
+
+  /** Provision the account if absent and mint this device's api token. */
+  private async mintSignup(slug: string, name: string, login: string, device?: string): Promise<Response> {
+    if (!(await this.provisionAccount(slug, name))) {
       return json({ error: 'at capacity — global ceiling reached' }, 503);
     }
     const cleanDevice = String(device ?? '')
@@ -553,7 +557,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       .slice(0, 80);
     const minted = await this.mint(slug, 'api', cleanDevice ? `github-cli:${cleanDevice}` : 'github-cli');
     await this.pushConfig(slug);
-    return json({ slug, login, token: minted.token }, 200);
+    return json({ slug, name, login, token: minted.token }, 200);
   }
 
   private async signupGithubToken(body: Record<string, unknown>): Promise<Response> {
@@ -565,10 +569,11 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
   }
 
   // ── Volter signup: a person signed in with Volter (id.volter.ai) ────────────────
-  /** A Volter access token whose audience is this relay, verified from the issuer's keys. The account is the
-   *  linked GitHub account, so an existing github:<login> account is the same account; a Volter identity with no
-   *  linked GitHub is told to link one. The token's GitHub id is the key; its login is what the identity service
-   *  recorded at linking and may be stale, so the current login (the allowlist's key) is read from GitHub. */
+  /** A Volter access token whose audience is this relay, verified from the issuer's keys. A person with a linked
+   *  GitHub account is that account, so an existing github:<login> account is the same account; the token's GitHub
+   *  id is the key and the current login (the allowlist's key) is read from GitHub, since the login the identity
+   *  service recorded may be stale. A Volter identity without GitHub is its own account, `v-` and a digest of its
+   *  permanent subject (a slug is lowercase; a subject is not), admitted by its verified email. */
   private async signupVolter(body: Record<string, unknown>, origin: string): Promise<Response> {
     const token = String(body.access_token ?? '');
     if (!token) return json({ error: 'missing access_token' }, 400);
@@ -576,10 +581,15 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     let person;
     try { person = await verifyIdentityToken(token, { issuer, audience: this.env.VOLTER_AUDIENCE || origin }); }
     catch { return json({ error: 'volter verification failed' }, 401); }
-    const id = Number(person.githubId);
-    if (!person.githubId || !Number.isSafeInteger(id)) {
-      return json({ error: 'link a GitHub account to your Volter account at id.volter.ai; tunnel accounts are GitHub logins' }, 403);
+    if (!person.githubId) {
+      const email = person.emailVerified && person.email ? person.email.toLowerCase() : '';
+      if (!this.signupAllowed(email)) return json({ error: `signup not permitted for volter:${email || person.subject}` }, 403);
+      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${issuer}|${person.subject}`)));
+      const slug = `v-${[...digest.slice(0, 16)].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+      return this.mintSignup(slug, `volter:${email || person.subject}`, email || person.subject, String(body.device ?? ''));
     }
+    const id = Number(person.githubId);
+    if (!Number.isSafeInteger(id)) return json({ error: 'volter verification failed' }, 401);
     const r = await fetch(`${this.githubBase()}/user/${id}`, {
       headers: { 'user-agent': 'volter-tunnel', accept: 'application/vnd.github+json' },
     }).catch(() => null);

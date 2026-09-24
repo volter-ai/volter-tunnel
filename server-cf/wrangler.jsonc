@@ -74,7 +74,7 @@
     "SIGNUP_RPS": "5"
 
     // Optional (unset = off):
-    //   SIGNUP_ALLOWED_USERS — allowlist mode (comma-separated GitHub logins).
+    //   SIGNUP_ALLOWED_USERS — allowlist mode (comma-separated GitHub logins, or the verified email of a Volter identity without GitHub).
     //     Signup FAILS CLOSED when unset/empty; set SIGNUP_OPEN=true to allow
     //     everyone. Set via `wrangler secret put` (keep logins out of the repo).
     //   SIGNUP_OPEN=true     — open signup to everyone (only when no allowlist).

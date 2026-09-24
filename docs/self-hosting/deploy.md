@@ -31,7 +31,7 @@ All commands run from `server-cf/`.
 **Secrets** (`wrangler secret put <NAME>`):
 - `ROOT_TOKEN` — **required.** Admin credential (mint `vtr_…`, e.g.
   `openssl rand -hex 24` prefixed `vtr_`). Rotatable: re-put + redeploy.
-- `SIGNUP_ALLOWED_USERS` — comma-separated GitHub logins allowed to sign up.
+- `SIGNUP_ALLOWED_USERS` — comma-separated GitHub logins allowed to sign up, and the verified email addresses of Volter identities without a linked GitHub account (`volter-tunnel login --volter`).
   Kept as a secret so it isn't committed to a public repo. **Signup fails CLOSED:**
   if this is unset/empty, *nobody* can sign up unless `SIGNUP_OPEN=true` is also
   set. So the three modes are: allowlist (this set), fully open (`SIGNUP_OPEN=true`,
