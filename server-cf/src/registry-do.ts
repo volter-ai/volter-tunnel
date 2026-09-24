@@ -15,6 +15,7 @@
  *                     read usage — but NEVER raise its own limits (so a leaked
  *                     service token cannot uncap spend)
  */
+import { verifyIdentityToken } from '@volter/identity';
 import { DurableObject } from 'cloudflare:workers';
 import {
   hashToken,
@@ -290,6 +291,8 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       switch (url.pathname) {
         case '/signup/github':
           return this.signupGithubToken(body);
+        case '/signup/volter':
+          return this.signupVolter(body, url.origin);
         case '/signup/github/gist/start':
           return this.gistStart();
         case '/signup/github/gist/verify':
@@ -559,6 +562,30 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
     const user = await this.githubUser(token);
     if (!user) return json({ error: 'github verification failed' }, 401);
     return this.finalizeSignup(user.id, user.login, String(body.device ?? ''));
+  }
+
+  // ── Volter signup: a person signed in with Volter (id.volter.ai) ────────────────
+  /** A Volter access token whose audience is this relay, verified from the issuer's keys. The account is the
+   *  linked GitHub account, so an existing github:<login> account is the same account; a Volter identity with no
+   *  linked GitHub is told to link one. The token's GitHub id is the key; its login is what the identity service
+   *  recorded at linking and may be stale, so the current login (the allowlist's key) is read from GitHub. */
+  private async signupVolter(body: Record<string, unknown>, origin: string): Promise<Response> {
+    const token = String(body.access_token ?? '');
+    if (!token) return json({ error: 'missing access_token' }, 400);
+    const issuer = this.env.VOLTER_ISSUER || 'https://id.volter.ai';
+    let person;
+    try { person = await verifyIdentityToken(token, { issuer, audience: this.env.VOLTER_AUDIENCE || origin }); }
+    catch { return json({ error: 'volter verification failed' }, 401); }
+    const id = Number(person.githubId);
+    if (!person.githubId || !Number.isSafeInteger(id)) {
+      return json({ error: 'link a GitHub account to your Volter account at id.volter.ai; tunnel accounts are GitHub logins' }, 403);
+    }
+    const r = await fetch(`${this.githubBase()}/user/${id}`, {
+      headers: { 'user-agent': 'volter-tunnel', accept: 'application/vnd.github+json' },
+    }).catch(() => null);
+    const user = r?.ok ? ((await r.json().catch(() => null)) as { id?: number; login?: string } | null) : null;
+    if (user?.id !== id || !user.login) return json({ error: 'github lookup failed' }, 502);
+    return this.finalizeSignup(id, user.login, String(body.device ?? ''));
   }
 
   // ── gist-proof signup: prove GitHub ownership without sending us any token ─────

@@ -34,14 +34,16 @@ function readSavedToken(): string | undefined {
 }
 
 /**
- * `volter-tunnel login` — prove a GitHub identity to the relay and save the api
- * token it mints. Two methods, both via the existing GitHub setup (no OAuth app):
+ * `volter-tunnel login` — prove who you are to the relay and save the api token
+ * it mints. With --volter, a Volter sign-in (id.volter.ai) by the device grant;
+ * the account is the Volter identity's linked GitHub account. Or, via the
+ * existing GitHub setup (no OAuth app):
  *   - token (default): send the `gh auth token` to the relay, which verifies it
  *     via the GitHub API and discards it. Override with --token <t>.
  *   - --gist:          relay issues a nonce, we publish it as a public gist, and
  *     the relay reads the gist's public owner — no token ever leaves the machine.
  */
-async function runLogin(opts: { host: string; method: 'token' | 'gist'; token?: string }): Promise<void> {
+async function runLogin(opts: { host: string; method: 'token' | 'gist' | 'volter'; token?: string; issuer?: string }): Promise<void> {
   const host = opts.host.replace(/\/$/, '');
   const { execFileSync } = await import('node:child_process');
   const sh = (cmd: string, a: string[], input?: string): string =>
@@ -57,7 +59,12 @@ async function runLogin(opts: { host: string; method: 'token' | 'gist'; token?: 
   };
 
   let resp: Record<string, unknown>;
-  if (opts.method === 'gist') {
+  if (opts.method === 'volter') {
+    // A Volter sign-in (id.volter.ai) by the device grant, for this relay as the token's audience.
+    const { volterDeviceSignIn } = await import('./volter-device');
+    const accessToken = await volterDeviceSignIn({ issuer: opts.issuer, audience: new URL(host).origin, clientId: process.env.VOLTER_CLIENT_ID });
+    resp = await postJson('/signup/volter', { access_token: accessToken, device: os.hostname() });
+  } else if (opts.method === 'gist') {
     // The verifier is kept private (never placed in the public gist) — it binds
     // this verify call to this login session.
     const { nonce, verifier } = (await postJson('/signup/github/gist/start', {})) as {
@@ -210,7 +217,7 @@ if (invokedDirectly()) {
   // `volter-tunnel login` — establish a GitHub-backed account, save its token.
   if (args[0] === 'login') {
     try {
-      await runLogin({ host, method: args.includes('--gist') ? 'gist' : 'token', token: flag('token') });
+      await runLogin({ host, method: args.includes('--volter') ? 'volter' : args.includes('--gist') ? 'gist' : 'token', token: flag('token'), issuer: flag('volter-issuer') || process.env.VOLTER_ISSUER });
       process.exit(0);
     } catch (e) {
       console.error('login failed:', e instanceof Error ? e.message : String(e));
@@ -280,7 +287,7 @@ if (invokedDirectly()) {
   if (!port) {
     console.error(
       'Usage:\n' +
-        '  volter-tunnel login [--gist] [--token <t>] [--host <url>]\n' +
+        '  volter-tunnel login [--volter [--volter-issuer <url>]] [--gist] [--token <t>] [--host <url>]\n' +
         '  volter-tunnel whoami | usage [--json] [--host <url>]\n' +
         '  volter-tunnel reservations [--json] | release <tunnel-id> [--host <url>]\n' +
         '  volter-tunnel tokens [--json] | token <restore|revoke> <token-id> [--host <url>]\n' +

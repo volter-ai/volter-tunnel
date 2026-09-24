@@ -48,6 +48,10 @@ export interface MeteringEnv {
   /** GitHub API base for signup identity verification (#2). Default
    *  https://api.github.com; tests point it at a local stub. */
   GITHUB_API_BASE?: string;
+  /** The identity service people sign up with (`volter-tunnel login --volter`); https://id.volter.ai when unset. */
+  VOLTER_ISSUER?: string;
+  /** The audience a Volter token names; this relay's own origin when unset. */
+  VOLTER_AUDIENCE?: string;
   /** Free-tier limits applied to a self-provisioned GitHub-signup account. */
   SIGNUP_DAY_LIMIT?: string;
   SIGNUP_MONTH_LIMIT?: string;
