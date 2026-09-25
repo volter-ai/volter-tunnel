@@ -1,8 +1,8 @@
 # @volter/tunnel — Future Work / Backlog
 
 Everything deferred out of the free-tier build, with *what unblocks it*. The
-free tier (Phase 0 + 1 + #10) is built, deployed, and hardened — see
-[ROADMAP.md](./ROADMAP.md). This file is the backlog of record (convert to
+free tier (Phase 0 + 1 + #10) is built, deployed, and hardened ([ROADMAP.md](./ROADMAP.md)).
+This file is the backlog of record (convert to
 GitHub issues as items are picked up).
 
 ---
