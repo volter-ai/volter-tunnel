@@ -42,9 +42,6 @@ hostname cert is the paid cost driver.
 - **Inspector web UI** — the inspector/replay is owner-gated and accessed via
   `Authorization: Bearer <tunnel-secret>` (curl today). A small browser UI for the
   owner would be nice.
-- **Pricing/tier productization** — the *enforcement* for tiers exists
-  (per-account limits via the admin API). Productizing = a pricing page +
-  billing (e.g. Stripe) that calls the admin API to set limits. Outside this repo.
 
 ## Operator tasks (not code)
 
