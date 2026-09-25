@@ -48,7 +48,7 @@ hostname cert is the paid cost driver.
 - **Cloudflare WAF rate-limit rule** on `/signup/*` and `/report` — per-IP edge
   layer atop the in-DO `SIGNUP_RPS` limiter. Needs the dashboard or a WAF-scoped
   API token.
-- **Open signup**, when ready: set `SIGNUP_OPEN=true` (an empty `SIGNUP_ALLOWED_USERS` fails closed).
+- **Open signup**, when ready: clear `SIGNUP_ALLOWED_USERS` and set `SIGNUP_OPEN=true` (a set allowlist restricts signup; an empty one without `SIGNUP_OPEN` fails closed).
 
 ## Security hardening (minor, deferred)
 
