@@ -1,3 +1,5 @@
+<p align="center"><img src="https://brand.volter.ai/logo/volter-tunnel/svg?size=96" alt="volter-tunnel"></p>
+
 # volter-tunnel
 
 [![CI](https://github.com/volter-ai/volter-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/volter-ai/volter-tunnel/actions/workflows/ci.yml)
@@ -8,7 +10,7 @@ Cloudflare-Tunnel alternative whose headline feature is a **free, stable,
 reservable subdomain** that survives reconnects. Built on Cloudflare Workers +
 Durable Objects, so idle tunnels cost ~nothing.
 
-📖 **Documentation:** <https://volter-ai.github.io/volter-tunnel/>
+**Documentation:** <https://volter-ai.github.io/volter-tunnel/>
 
 ```bash
 volter-tunnel login --host https://your-relay        # GitHub login, no OAuth app

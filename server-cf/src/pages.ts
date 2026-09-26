@@ -176,20 +176,12 @@ const STYLE = /* css */ `
   }
 `;
 
-// Logo: a tunnel archway (the portal) with a lightning bolt in the opening —
-// "tunnel" + "volt(er)". White on the npm-red rounded square. Reads cleanly from
-// 96px down to a 16px favicon. Single source of truth for the mark + favicon.
-const LOGO_PATHS =
-  `<path fill="#fff" fill-rule="evenodd" d="M15 84 V48 a35 35 0 0 1 70 0 V84 H67 V48 a17 17 0 0 0 -34 0 V84 Z"/>` +
-  `<path fill="#fff" d="M53 49 L41 67 H50 L47 81 L61 61 H51 Z"/>`;
+// The mark and favicon are the brand's volter-tunnel logo, served by the brand site.
+const LOGO_URL = 'https://brand.volter.ai/logo/volter-tunnel/svg';
 function logoSvg(size: number): string {
-  return `<svg class="mark" width="${size}" height="${size}" viewBox="0 0 100 100" aria-hidden="true"><rect width="100" height="100" rx="22" fill="#cb3837"/>${LOGO_PATHS}</svg>`;
+  return `<img class="mark" src="${LOGO_URL}?size=${size * 2}" width="${size}" height="${size}" alt="" aria-hidden="true">`;
 }
-const FAVICON =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E" +
-  "%3Crect width='100' height='100' rx='22' fill='%23cb3837'/%3E" +
-  "%3Cpath fill='%23fff' fill-rule='evenodd' d='M15 84 V48 a35 35 0 0 1 70 0 V84 H67 V48 a17 17 0 0 0 -34 0 V84 Z'/%3E" +
-  "%3Cpath fill='%23fff' d='M53 49 L41 67 H50 L47 81 L61 61 H51 Z'/%3E%3C/svg%3E";
+const FAVICON = `${LOGO_URL}?size=64`;
 
 function shell(title: string, body: string): string {
   return `<!doctype html><html lang="en"><head>

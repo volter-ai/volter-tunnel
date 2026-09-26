@@ -11,7 +11,9 @@ export default defineConfig({
   base: '/volter-tunnel/',
   cleanUrls: true,
   lastUpdated: true,
+  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: 'https://brand.volter.ai/logo/volter-tunnel/svg?size=64' }]],
   themeConfig: {
+    logo: { src: 'https://brand.volter.ai/logo/volter-tunnel/svg?size=64', alt: 'volter-tunnel' },
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Self-hosting', link: '/self-hosting/deploy' },
