@@ -62,8 +62,8 @@
     "lint": "biome check client packages server-cf/src examples",
     "format": "biome format --write client packages server-cf/src examples",
     "tunnel": "bun run client/tunnel-client.ts",
-    "docs:dev": "vitepress dev docs",
-    "docs:build": "vitepress build docs",
+    "docs:dev": "node docs/.vitepress/fetch-brand.mjs && vitepress dev docs",
+    "docs:build": "node docs/.vitepress/fetch-brand.mjs && vitepress build docs",
     "docs:preview": "vitepress preview docs"
   },
   "dependencies": {

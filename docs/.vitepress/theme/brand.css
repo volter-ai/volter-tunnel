@@ -1,0 +1,42 @@
+/* VitePress's theme variables mapped onto the Volter brand's semantic roles (decision 0028):
+   a paper ground, ink actions, lime selection, Geist with Geist Mono, hairline rules. */
+html:not(.dark) { color-scheme: light; }
+html.dark { color-scheme: dark; }
+:root {
+  --vp-c-bg: var(--volter-surface-page);
+  --vp-c-bg-alt: var(--volter-surface-subtle);
+  --vp-c-bg-elv: var(--volter-surface-raised);
+  --vp-c-bg-soft: var(--volter-surface-subtle);
+  --vp-c-text-1: var(--volter-text-primary);
+  --vp-c-text-2: var(--volter-text-muted);
+  --vp-c-text-3: var(--volter-text-tertiary);
+  --vp-c-divider: var(--volter-border-default);
+  --vp-c-border: var(--volter-border-strong);
+  --vp-c-gutter: var(--volter-border-subtle);
+  --vp-c-brand-1: var(--volter-action-default);
+  --vp-c-brand-2: var(--volter-action-hover);
+  --vp-c-brand-3: var(--volter-action-default);
+  --vp-c-brand-soft: var(--volter-selection-soft);
+  --vp-c-default-soft: var(--volter-surface-subtle);
+  --vp-button-brand-bg: var(--volter-action-default);
+  --vp-button-brand-hover-bg: var(--volter-action-hover);
+  --vp-button-brand-active-bg: var(--volter-action-hover);
+  --vp-button-brand-text: var(--volter-text-on-strong);
+  --vp-button-brand-hover-text: var(--volter-text-on-strong);
+  --vp-button-alt-bg: var(--volter-surface-raised);
+  --vp-button-alt-text: var(--volter-text-primary);
+  --vp-home-hero-name-color: var(--volter-text-primary);
+  --vp-font-family-base: var(--volter-font-ui);
+  --vp-font-family-mono: var(--volter-font-data);
+  --vp-code-bg: var(--volter-surface-subtle);
+  --vp-c-tip-1: var(--volter-status-healthy-text);
+  --vp-c-tip-soft: var(--volter-status-healthy-soft);
+  --vp-c-warning-1: var(--volter-status-attention-text);
+  --vp-c-warning-soft: var(--volter-status-attention-soft);
+  --vp-c-danger-1: var(--volter-status-danger-text);
+  --vp-c-danger-soft: var(--volter-status-danger-soft);
+}
+::selection { background: var(--volter-selection-wash); }
+.VPHero .name, .VPHero .text { font-weight: 500; letter-spacing: -0.02em; }
+.VPFeature { border-radius: var(--volter-radius-panel); border: 1px solid var(--volter-border-default); }
+.VPButton { border-radius: var(--volter-radius-control) !important; }

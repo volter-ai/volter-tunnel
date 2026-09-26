@@ -4,7 +4,7 @@ import { defineConfig } from 'vitepress'
 // Internal development docs (decisions, roadmap, backlog, publishing) live in
 // /dev-docs and are intentionally NOT part of this site.
 export default defineConfig({
-  title: 'volter-tunnel',
+  title: 'Volter Tunnel',
   description:
     'Open-source HTTP/WebSocket reverse tunnel with free, stable, reservable subdomains. Built on Cloudflare Workers + Durable Objects.',
   // Project page served at https://volter-ai.github.io/volter-tunnel/
@@ -13,7 +13,7 @@ export default defineConfig({
   lastUpdated: true,
   head: [['link', { rel: 'icon', type: 'image/svg+xml', href: 'https://brand.volter.ai/logo/volter-tunnel/svg?size=64' }]],
   themeConfig: {
-    logo: { src: 'https://brand.volter.ai/logo/volter-tunnel/svg?size=64', alt: 'volter-tunnel' },
+    logo: { src: 'https://brand.volter.ai/logo/volter-tunnel/svg?size=64', alt: 'Volter Tunnel' },
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Self-hosting', link: '/self-hosting/deploy' },

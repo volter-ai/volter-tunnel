@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: volter-tunnel
+  name: Volter Tunnel
   text: Free, stable, reservable tunnels
   tagline: An open-source HTTP/WebSocket reverse tunnel — an ngrok / Cloudflare-Tunnel alternative whose headline feature is a free, stable, reservable subdomain that survives reconnects.
   actions:

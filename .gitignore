@@ -21,3 +21,5 @@ docs/.vitepress/cache
 
 # Brand tokens, generated at build by server-cf/scripts/brand-tokens.mjs
 server-cf/src/brand.generated.ts
+# the brand tokens and faces, fetched at docs build (docs/.vitepress/fetch-brand.mjs)
+docs/.vitepress/theme/brand/
