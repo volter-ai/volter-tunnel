@@ -41,8 +41,8 @@ const STYLE = /* css */ `
   /* links in running text are ink like the text around them, so they carry an underline */
   .doc p a, .note a, section .lede a { text-decoration: underline; text-underline-offset: 2px; }
 
-  /* the top strip, in the brand's accents */
-  .npm-bar { height: 5px; width: 100%; background: linear-gradient(to right, var(--volter-accent-orange), var(--volter-accent-lime-strong), var(--volter-accent-lilac)); }
+  /* sparse labels in Geist Mono, uppercase and letter-spaced (decision 0028) */
+  .label { font: 11px/1.4 var(--monospace); letter-spacing: .14em; text-transform: uppercase; color: var(--text-color-light); margin: 0 0 18px; }
 
   .wrap { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
 
@@ -52,7 +52,7 @@ const STYLE = /* css */ `
     position: sticky; top: 0; z-index: 10;
   }
   .nav .wrap { display: flex; align-items: center; gap: 18px; height: 64px; }
-  .brand { font-weight: 700; font-size: 20px; display: flex; align-items: center; gap: 9px; color: var(--text-color); }
+  .brand { font-weight: 600; font-size: 20px; display: flex; align-items: center; gap: 9px; color: var(--text-color); }
   .brand:hover { text-decoration: none; }
   .brand .mark { display: block; }
   .nav nav { margin-left: auto; display: flex; gap: 24px; font-size: 16px; }
@@ -60,28 +60,28 @@ const STYLE = /* css */ `
   .nav nav a:hover { color: var(--volter-action-hover); text-decoration: none; }
 
   .hero { padding: 100px 0 80px; }
-  .hero h1 { font-size: 52px; line-height: 1.15; margin: 0 0 24px; font-weight: 700; letter-spacing: -1.8px; }
+  .hero h1 { font-size: 50px; line-height: 1.15; margin: 0 0 24px; font-weight: 500; letter-spacing: -1.4px; }
   .hero p.sub { font-size: 21px; line-height: 1.6; color: var(--text-color-light); max-width: 680px; margin: 0 0 40px; }
-  .hero code { font-family: var(--monospace); font-size: 0.9em; background: var(--bg-light-gray); padding: 3px 7px; border-radius: 5px; border: 1px solid var(--border-color); }
+  .hero code { font-family: var(--monospace); font-size: 0.9em; background: var(--bg-light-gray); padding: 3px 7px; border-radius: var(--volter-radius-control); border: 1px solid var(--border-color); }
 
   .cta { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 55px; }
   .btn {
-    display: inline-block; padding: 14px 28px; border-radius: 6px; font-weight: 600; font-size: 16px;
+    display: inline-block; padding: 14px 28px; border-radius: var(--volter-radius-control); font-weight: 600; font-size: 16px;
     border: 1px solid var(--border-color); color: var(--text-color); background: var(--volter-surface-raised); cursor: pointer;
     transition: all 0.2s ease;
   }
   .btn.primary { background: var(--volter-action-default); border-color: var(--volter-action-default); color: var(--volter-text-on-strong); }
-  .btn:hover { text-decoration: none; border-color: var(--volter-border-emphasis); transform: translateY(-1px); box-shadow: 0 2px 4px var(--volter-overlay-hover); }
+  .btn:hover { text-decoration: none; border-color: var(--volter-border-emphasis); }
   .btn.primary:hover { background: var(--volter-action-hover); border-color: var(--volter-action-hover); }
 
   pre.term {
-    text-align: left; background: var(--bg-light-gray); border: 1px solid var(--border-color); border-radius: 0 0 6px 6px;
+    text-align: left; background: var(--bg-light-gray); border: 1px solid var(--border-color); border-radius: 0 0 var(--volter-radius-panel) var(--volter-radius-panel);
     padding: 20px; overflow: auto; font: 14px/1.6 var(--monospace);
     color: var(--text-color); margin: 0;
   }
   .term-header {
     background: var(--volter-surface-sunken); padding: 10px 20px; border: 1px solid var(--border-color);
-    border-bottom: none; border-radius: 6px 6px 0 0; font-family: var(--monospace);
+    border-bottom: none; border-radius: var(--volter-radius-panel) var(--volter-radius-panel) 0 0; font-family: var(--monospace);
     font-size: 13px; color: var(--text-color-light);
   }
   pre.term .c { color: var(--volter-code-keyword); }
@@ -90,21 +90,19 @@ const STYLE = /* css */ `
 
   section { border-top: 1px solid var(--border-color); padding: 80px 0; }
   section.bg-gray { background: var(--bg-light-gray); }
-  section h2 { font-size: 36px; margin: 0 0 16px; font-weight: 600; letter-spacing: -.8px; position: relative; padding-bottom: 16px; }
-  /* npm-style short underline under each section heading, in the brand's orange accent */
-  section h2::after { content: ""; position: absolute; left: 0; bottom: 0; width: 46px; height: 3px; border-radius: 2px; background: var(--volter-accent-orange); }
+  section h2 { font-size: 34px; margin: 0 0 16px; font-weight: 500; letter-spacing: -.6px; }
   section .lede { color: var(--text-color-light); font-size: 18px; line-height: 1.7; margin: 0 0 50px; max-width: 680px; }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 30px; }
   .card {
-    background: var(--volter-surface-raised); border: 1px solid var(--border-color); border-radius: 8px; padding: 28px;
+    background: var(--volter-surface-raised); border: 1px solid var(--border-color); border-radius: var(--volter-radius-panel); padding: 28px;
     transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
   }
-  .card:hover { transform: translateY(-2px); border-color: var(--volter-border-strong); box-shadow: 0 5px 15px var(--volter-overlay-hover); }
-  .card .icon { margin-bottom: 16px; color: var(--volter-accent-orange); }
+  .card:hover { border-color: var(--volter-border-strong); }
+  .card .icon { margin-bottom: 16px; color: var(--text-color); }
   .card h3 { margin: 0 0 10px; font-size: 19px; font-weight: 600; }
   .card p { margin: 0; color: var(--text-color-light); font-size: 16px; line-height: 1.65; }
-  .card code { font-family: var(--monospace); font-size: 0.9em; background: var(--bg-light-gray); padding: 3px 7px; border-radius: 5px; border: 1px solid var(--border-color); }
+  .card code { font-family: var(--monospace); font-size: 0.9em; background: var(--bg-light-gray); padding: 3px 7px; border-radius: var(--volter-radius-control); border: 1px solid var(--border-color); }
 
   .steps-grid { display: grid; grid-template-columns: 30px 1fr; gap: 20px 30px; }
   .step-num {
@@ -120,7 +118,7 @@ const STYLE = /* css */ `
   .step-content code {
     display: block; font: 14px/1.6 var(--monospace); color: var(--text-color);
     background: var(--volter-surface-raised); border: 1px solid var(--border-color);
-    border-radius: 6px; padding: 14px 16px; margin-top: 14px; overflow: auto;
+    border-radius: var(--volter-radius-panel); padding: 14px 16px; margin-top: 14px; overflow: auto;
   }
 
   form.wl { display: grid; grid-template-columns: 1fr; gap: 12px; max-width: 520px; }
@@ -128,7 +126,7 @@ const STYLE = /* css */ `
   form.wl label { font-size: 14px; font-weight: 600; display: block; margin-bottom: 8px; }
   form.wl input, form.wl textarea {
     width: 100%; background: var(--volter-surface-raised); border: 1px solid var(--volter-border-strong); color: var(--text-color);
-    border-radius: 6px; padding: 14px; font: 16px/1.4 inherit; transition: border-color 0.2s, box-shadow 0.2s;
+    border-radius: var(--volter-radius-control); padding: 14px; font: 16px/1.4 inherit; transition: border-color 0.2s, box-shadow 0.2s;
   }
   form.wl textarea { resize: vertical; min-height: 90px; }
   form.wl input:focus, form.wl textarea:focus {
@@ -151,18 +149,18 @@ const STYLE = /* css */ `
 
   /* Docs article (same light system) */
   .doc { max-width: 820px; padding-bottom: 40px; }
-  .doc h1 { font-size: 40px; letter-spacing: -1px; font-weight: 700; margin: 0 0 8px; }
+  .doc h1 { font-size: 40px; letter-spacing: -1px; font-weight: 500; margin: 0 0 8px; }
   .doc .doc-sub { color: var(--text-color-light); font-size: 18px; margin: 0 0 4px; }
-  .doc h2 { font-size: 27px; font-weight: 600; letter-spacing: -.4px; margin: 0 0 14px; padding-top: 40px; margin-top: 40px; border-top: 1px solid var(--border-color); }
+  .doc h2 { font-size: 27px; font-weight: 500; letter-spacing: -.4px; margin: 0 0 14px; padding-top: 40px; margin-top: 40px; border-top: 1px solid var(--border-color); }
   .doc h3 { font-size: 19px; font-weight: 600; margin: 28px 0 8px; }
   .doc p { color: var(--text-color-light); }
-  .doc pre { background: var(--bg-light-gray); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px 18px; overflow: auto; font: 14px/1.7 var(--monospace); color: var(--text-color); }
+  .doc pre { background: var(--bg-light-gray); border: 1px solid var(--border-color); border-radius: var(--volter-radius-panel); padding: 16px 18px; overflow: auto; font: 14px/1.7 var(--monospace); color: var(--text-color); }
   .doc pre code { background: none; border: none; padding: 0; font-size: inherit; }
-  .doc code { font-family: var(--monospace); font-size: 0.9em; background: var(--bg-light-gray); padding: 2px 6px; border-radius: 5px; border: 1px solid var(--border-color); }
+  .doc code { font-family: var(--monospace); font-size: 0.9em; background: var(--bg-light-gray); padding: 2px 6px; border-radius: var(--volter-radius-control); border: 1px solid var(--border-color); }
   .doc table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 15px; }
   .doc th, .doc td { border: 1px solid var(--border-color); padding: 9px 12px; text-align: left; }
   .doc th { background: var(--bg-light-gray); font-weight: 600; }
-  .note { background: var(--volter-surface-raised); border: 1px solid var(--border-color); border-left: 3px solid var(--volter-accent-orange); border-radius: 6px; padding: 14px 18px; color: var(--text-color-light); font-size: 15px; margin: 20px 0; }
+  .note { background: var(--volter-surface-raised); border: 1px solid var(--border-color); border-left: 3px solid var(--volter-border-emphasis); border-radius: var(--volter-radius-panel); padding: 14px 18px; color: var(--text-color-light); font-size: 15px; margin: 20px 0; }
 
   @media (max-width: 768px) {
     .hero { text-align: left; padding: 60px 0; }
@@ -194,7 +192,7 @@ function shell(title: string, body: string): string {
 <meta name="description" content="Volter Tunnel — free, stable, reservable tunnel URLs. An open-source ngrok alternative on Cloudflare's edge.">
 <link rel="icon" href="${FAVICON}">
 <style>${BRAND_TOKENS_CSS}${STYLE}</style>
-</head><body><div class="npm-bar"></div>${body}</body></html>`;
+</head><body>${body}</body></html>`;
 }
 
 function nav(): string {
@@ -238,6 +236,7 @@ export function landingPage(domain: string): string {
   const body = `${nav()}
   <main>
     <div class="hero"><div class="wrap">
+      <p class="label">Volter Tunnel · stable URLs on Cloudflare's edge</p>
       <h1>A tunnel URL that's yours, free, and stays put.</h1>
       <p class="sub">Expose a local port at <code>https://${example}</code> — reserve a
         friendly subdomain once and keep it across reconnects and restarts. Open-source, on Cloudflare's edge, with
@@ -257,6 +256,7 @@ export function landingPage(domain: string): string {
     </div></div>
 
     <section id="features" class="bg-gray"><div class="wrap">
+      <p class="label">Features</p>
       <h2>Why Volter Tunnel</h2>
       <p class="lede">Everything ngrok charges for at the free-tier boundary — given away, because idle tunnels are
         genuinely free to run on Cloudflare Durable Objects.</p>
@@ -287,6 +287,7 @@ export function landingPage(domain: string): string {
     </div></section>
 
     <section id="start"><div class="wrap">
+      <p class="label">Quickstart</p>
       <h2>Quickstart</h2>
       <p class="lede">Three steps once you're off the waitlist. Full reference in the <a href="/docs">docs</a>.</p>
       <div class="steps-grid">
@@ -312,6 +313,7 @@ export function landingPage(domain: string): string {
     </div></section>
 
     <section id="waitlist" class="bg-gray"><div class="wrap">
+      <p class="label">Access</p>
       <h2>Request access</h2>
       <p class="lede">We're rolling out by invite while we scale. Drop your GitHub username and we'll add you to the
         allowlist — you'll log in with that same GitHub account.</p>
