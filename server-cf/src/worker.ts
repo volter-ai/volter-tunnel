@@ -12,7 +12,7 @@ import { type Env, getTunnelIdFromHost, handleCookieBootstrap } from './auth';
 import { TunnelDO } from './tunnel-do';
 import { AccountDO } from './account-do';
 import { RegistryDO } from './registry-do';
-import { docsPage, htmlResponse, landingPage } from './pages';
+import { docsPage, fontResponse, htmlResponse, landingPage } from './pages';
 
 export { TunnelDO, AccountDO, RegistryDO };
 
@@ -97,6 +97,10 @@ export default {
     }
     if (request.method === 'GET' && (url.pathname === '/docs' || url.pathname === '/docs/')) {
       return htmlResponse(docsPage(env.TUNNEL_DOMAIN));
+    }
+    if (request.method === 'GET' && url.pathname.startsWith('/fonts/')) {
+      const font = fontResponse(url.pathname.slice('/fonts/'.length));
+      if (font) return font;
     }
     return new Response('volter-tunnel (cloudflare)', { status: 200 });
   },

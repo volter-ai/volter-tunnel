@@ -10,41 +10,45 @@
  * while `SIGNUP_ALLOWED_USERS` is set, so the public front door collects requests
  * for an operator to approve (append the login to the env secret).
  *
- * Visual language: npmjs.com — light/white, npm-red accent, system Helvetica,
- * left-aligned, flat bordered cards, roomy. (Design iterated via screenshot
- * review.) Fully offline: no remote fonts/images/CSS.
+ * Visual language: npmjs.com's layout — left-aligned, flat bordered cards, roomy —
+ * in the Volter brand. Colours and faces are the brand's semantic roles
+ * (var(--volter-*), company decision 0018), never literal colours (the
+ * pre-commit hook refuses them). The tokens and faces are generated into
+ * brand.generated.ts at build time (scripts/brand-tokens.mjs) and served by the
+ * Worker itself: no remote fonts or CSS at runtime.
  */
+import { BRAND_FONTS, BRAND_TOKENS_CSS } from './brand.generated';
 
 const STYLE = /* css */ `
   :root {
-    --npm-red: #cb3837;
-    --npm-red-hover: #b02b2a;
-    --border-color: #e6e6e6;
-    --text-color: #262626;
-    --text-color-light: #555;
-    --bg-light-gray: #f7f7f7;
-    --monospace: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --border-color: var(--volter-border-default);
+    --text-color: var(--volter-text-primary);
+    --text-color-light: var(--volter-text-muted);
+    --bg-light-gray: var(--volter-surface-subtle);
+    --monospace: var(--volter-font-data);
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body {
     margin: 0;
-    background: #fff;
+    background: var(--volter-surface-page);
     color: var(--text-color);
-    font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font: 16px/1.7 var(--volter-font-ui);
     -webkit-font-smoothing: antialiased;
   }
-  a { color: var(--npm-red); text-decoration: none; }
-  a:hover { text-decoration: underline; color: var(--npm-red-hover); }
+  a { color: var(--volter-action-default); text-decoration: none; }
+  a:hover { text-decoration: underline; color: var(--volter-action-hover); }
+  /* links in running text are ink like the text around them, so they carry an underline */
+  .doc p a, .note a, section .lede a { text-decoration: underline; text-underline-offset: 2px; }
 
-  /* npm's signature rainbow top strip */
-  .npm-bar { height: 5px; width: 100%; background: linear-gradient(to right, #f98a33, #cb3837, #c13285, #9d368e); }
+  /* the top strip, in the brand's accents */
+  .npm-bar { height: 5px; width: 100%; background: linear-gradient(to right, var(--volter-accent-orange), var(--volter-accent-lime-strong), var(--volter-accent-lilac)); }
 
   .wrap { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
 
   header.nav {
     border-bottom: 1px solid var(--border-color);
-    background: #fff;
+    background: var(--volter-surface-page);
     position: sticky; top: 0; z-index: 10;
   }
   .nav .wrap { display: flex; align-items: center; gap: 18px; height: 64px; }
@@ -53,7 +57,7 @@ const STYLE = /* css */ `
   .brand .mark { display: block; }
   .nav nav { margin-left: auto; display: flex; gap: 24px; font-size: 16px; }
   .nav nav a { color: var(--text-color-light); transition: color 0.2s ease; }
-  .nav nav a:hover { color: var(--npm-red-hover); text-decoration: none; }
+  .nav nav a:hover { color: var(--volter-action-hover); text-decoration: none; }
 
   .hero { padding: 100px 0 80px; }
   .hero h1 { font-size: 52px; line-height: 1.15; margin: 0 0 24px; font-weight: 700; letter-spacing: -1.8px; }
@@ -63,12 +67,12 @@ const STYLE = /* css */ `
   .cta { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 55px; }
   .btn {
     display: inline-block; padding: 14px 28px; border-radius: 6px; font-weight: 600; font-size: 16px;
-    border: 1px solid var(--border-color); color: var(--text-color); background: #fff; cursor: pointer;
+    border: 1px solid var(--border-color); color: var(--text-color); background: var(--volter-surface-raised); cursor: pointer;
     transition: all 0.2s ease;
   }
-  .btn.primary { background: #1a1a1a; border-color: #1a1a1a; color: #fff; }
-  .btn:hover { text-decoration: none; border-color: #000; transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-  .btn.primary:hover { background: #000; border-color: #000; }
+  .btn.primary { background: var(--volter-action-default); border-color: var(--volter-action-default); color: var(--volter-text-on-strong); }
+  .btn:hover { text-decoration: none; border-color: var(--volter-border-emphasis); transform: translateY(-1px); box-shadow: 0 2px 4px var(--volter-overlay-hover); }
+  .btn.primary:hover { background: var(--volter-action-hover); border-color: var(--volter-action-hover); }
 
   pre.term {
     text-align: left; background: var(--bg-light-gray); border: 1px solid var(--border-color); border-radius: 0 0 6px 6px;
@@ -76,38 +80,38 @@ const STYLE = /* css */ `
     color: var(--text-color); margin: 0;
   }
   .term-header {
-    background: #f0f0f0; padding: 10px 20px; border: 1px solid var(--border-color);
+    background: var(--volter-surface-sunken); padding: 10px 20px; border: 1px solid var(--border-color);
     border-bottom: none; border-radius: 6px 6px 0 0; font-family: var(--monospace);
     font-size: 13px; color: var(--text-color-light);
   }
-  pre.term .c { color: var(--npm-red); }
-  pre.term .d { color: #888; }
-  pre.term .u { color: var(--text-color); font-weight: 600; }
+  pre.term .c { color: var(--volter-code-keyword); }
+  pre.term .d { color: var(--volter-code-comment); }
+  pre.term .u { color: var(--volter-code-text); font-weight: 600; }
 
   section { border-top: 1px solid var(--border-color); padding: 80px 0; }
   section.bg-gray { background: var(--bg-light-gray); }
   section h2 { font-size: 36px; margin: 0 0 16px; font-weight: 600; letter-spacing: -.8px; position: relative; padding-bottom: 16px; }
-  /* npm-style short colored underline under each section heading (--accent per section) */
-  section h2::after { content: ""; position: absolute; left: 0; bottom: 0; width: 46px; height: 3px; border-radius: 2px; background: var(--accent, var(--npm-red)); }
+  /* npm-style short underline under each section heading, in the brand's orange accent */
+  section h2::after { content: ""; position: absolute; left: 0; bottom: 0; width: 46px; height: 3px; border-radius: 2px; background: var(--volter-accent-orange); }
   section .lede { color: var(--text-color-light); font-size: 18px; line-height: 1.7; margin: 0 0 50px; max-width: 680px; }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 30px; }
   .card {
-    background: #fff; border: 1px solid var(--border-color); border-radius: 8px; padding: 28px;
+    background: var(--volter-surface-raised); border: 1px solid var(--border-color); border-radius: 8px; padding: 28px;
     transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
   }
-  .card:hover { transform: translateY(-2px); border-color: #ccc; box-shadow: 0 5px 15px rgba(0,0,0,0.05); }
-  .card .icon { margin-bottom: 16px; color: var(--npm-red); }
+  .card:hover { transform: translateY(-2px); border-color: var(--volter-border-strong); box-shadow: 0 5px 15px var(--volter-overlay-hover); }
+  .card .icon { margin-bottom: 16px; color: var(--volter-accent-orange); }
   .card h3 { margin: 0 0 10px; font-size: 19px; font-weight: 600; }
   .card p { margin: 0; color: var(--text-color-light); font-size: 16px; line-height: 1.65; }
   .card code { font-family: var(--monospace); font-size: 0.9em; background: var(--bg-light-gray); padding: 3px 7px; border-radius: 5px; border: 1px solid var(--border-color); }
 
   .steps-grid { display: grid; grid-template-columns: 30px 1fr; gap: 20px 30px; }
   .step-num {
-    grid-column: 1; font-size: 18px; font-weight: 700; color: var(--npm-red);
+    grid-column: 1; font-size: 18px; font-weight: 700; color: var(--text-color);
     width: 30px; height: 30px; border: 2px solid var(--border-color);
     border-radius: 50%; display: grid; place-items: center;
-    background: #fff;
+    background: var(--volter-surface-raised);
   }
   .step-content { grid-column: 2; padding-bottom: 30px; border-left: 2px solid var(--border-color); padding-left: 30px; margin-left: 14px; }
   .steps-grid > div:last-of-type { border-left: 2px solid transparent; }
@@ -115,7 +119,7 @@ const STYLE = /* css */ `
   .step-content p { margin: 0; font-size: 16px; color: var(--text-color-light); }
   .step-content code {
     display: block; font: 14px/1.6 var(--monospace); color: var(--text-color);
-    background: #fff; border: 1px solid var(--border-color);
+    background: var(--volter-surface-raised); border: 1px solid var(--border-color);
     border-radius: 6px; padding: 14px 16px; margin-top: 14px; overflow: auto;
   }
 
@@ -123,17 +127,17 @@ const STYLE = /* css */ `
   form.wl .form-group { display: flex; flex-direction: column; }
   form.wl label { font-size: 14px; font-weight: 600; display: block; margin-bottom: 8px; }
   form.wl input, form.wl textarea {
-    width: 100%; background: #fff; border: 1px solid #bbb; color: var(--text-color);
+    width: 100%; background: var(--volter-surface-raised); border: 1px solid var(--volter-border-strong); color: var(--text-color);
     border-radius: 6px; padding: 14px; font: 16px/1.4 inherit; transition: border-color 0.2s, box-shadow 0.2s;
   }
   form.wl textarea { resize: vertical; min-height: 90px; }
   form.wl input:focus, form.wl textarea:focus {
-    outline: none; border-color: var(--npm-red); box-shadow: 0 0 0 3px rgba(203, 56, 55, 0.15);
+    outline: none; border-color: var(--volter-border-emphasis); box-shadow: 0 0 0 3px color-mix(in srgb, var(--volter-action-default) 15%, transparent);
   }
   form.wl .btn { margin-top: 8px; }
   .wl-msg { font-size: 15px; min-height: 22px; padding-top: 5px; }
-  .wl-msg.ok { color: #28a745; }
-  .wl-msg.err { color: #d73a49; }
+  .wl-msg.ok { color: var(--volter-status-healthy-text); }
+  .wl-msg.err { color: var(--volter-status-danger-text); }
 
   footer { padding: 50px 0; font-size: 14px; border-top: 1px solid var(--border-color); background: var(--bg-light-gray); }
   footer .wrap { display: flex; gap: 30px; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; }
@@ -158,7 +162,7 @@ const STYLE = /* css */ `
   .doc table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 15px; }
   .doc th, .doc td { border: 1px solid var(--border-color); padding: 9px 12px; text-align: left; }
   .doc th { background: var(--bg-light-gray); font-weight: 600; }
-  .note { background: #fff; border: 1px solid var(--border-color); border-left: 3px solid var(--npm-red); border-radius: 6px; padding: 14px 18px; color: var(--text-color-light); font-size: 15px; margin: 20px 0; }
+  .note { background: var(--volter-surface-raised); border: 1px solid var(--border-color); border-left: 3px solid var(--volter-accent-orange); border-radius: 6px; padding: 14px 18px; color: var(--text-color-light); font-size: 15px; margin: 20px 0; }
 
   @media (max-width: 768px) {
     .hero { text-align: left; padding: 60px 0; }
@@ -189,7 +193,7 @@ function shell(title: string, body: string): string {
 <title>${title}</title>
 <meta name="description" content="volter-tunnel — free, stable, reservable tunnel URLs. An open-source ngrok alternative on Cloudflare's edge.">
 <link rel="icon" href="${FAVICON}">
-<style>${STYLE}</style>
+<style>${BRAND_TOKENS_CSS}${STYLE}</style>
 </head><body><div class="npm-bar"></div>${body}</body></html>`;
 }
 
@@ -252,7 +256,7 @@ export function landingPage(domain: string): string {
       </div>
     </div></div>
 
-    <section id="features" class="bg-gray" style="--accent:#cb3837"><div class="wrap">
+    <section id="features" class="bg-gray"><div class="wrap">
       <h2>Why volter-tunnel</h2>
       <p class="lede">Everything ngrok charges for at the free-tier boundary — given away, because idle tunnels are
         genuinely free to run on Cloudflare Durable Objects.</p>
@@ -282,7 +286,7 @@ export function landingPage(domain: string): string {
       </div>
     </div></section>
 
-    <section id="start" style="--accent:#f98a33"><div class="wrap">
+    <section id="start"><div class="wrap">
       <h2>Quickstart</h2>
       <p class="lede">Three steps once you're off the waitlist. Full reference in the <a href="/docs">docs</a>.</p>
       <div class="steps-grid">
@@ -307,12 +311,12 @@ export function landingPage(domain: string): string {
       </div>
     </div></section>
 
-    <section id="waitlist" class="bg-gray" style="--accent:#c13285"><div class="wrap">
+    <section id="waitlist" class="bg-gray"><div class="wrap">
       <h2>Request access</h2>
       <p class="lede">We're rolling out by invite while we scale. Drop your GitHub username and we'll add you to the
         allowlist — you'll log in with that same GitHub account.</p>
       <form class="wl" id="wl" autocomplete="off">
-        <div class="form-group"><label for="gh">GitHub username <span style="color:#d73a49">*</span></label>
+        <div class="form-group"><label for="gh">GitHub username <span style="color:var(--volter-status-danger-base)">*</span></label>
           <input id="gh" name="githubUser" placeholder="octocat" required maxlength="39"></div>
         <div class="form-group"><label for="em">Email <span style="color:var(--text-color-light)">(optional — to notify you)</span></label>
           <input id="em" name="email" type="email" placeholder="you@example.com" maxlength="200"></div>
@@ -442,6 +446,16 @@ tunnel.close();</code></pre>
   </main>
   ${footer()}`;
   return shell('volter-tunnel — docs', body);
+}
+
+/** A brand face named by the tokens (GET /fonts/<file>), or null. */
+export function fontResponse(file: string): Response | null {
+  const b64 = Object.hasOwn(BRAND_FONTS, file) ? BRAND_FONTS[file] : undefined;
+  if (!b64) return null;
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  return new Response(bytes, {
+    headers: { 'content-type': 'font/woff2', 'cache-control': 'public, max-age=86400' },
+  });
 }
 
 export function htmlResponse(html: string): Response {

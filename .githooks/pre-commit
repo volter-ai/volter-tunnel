@@ -1,0 +1,12 @@
+#!/bin/sh
+# The Worker's landing and docs pages read their colours from the brand's semantic roles
+# (brand.volter.ai/tokens.css, company decision 0018): a literal colour in them is refused. Use
+# var(--volter-<role>); the roles are listed at https://brand.volter.ai/tokens.json.
+files=$(git diff --cached --name-only --diff-filter=ACM -- server-cf/src/pages.ts)
+[ -z "$files" ] && exit 0
+found=$(git diff --cached -U0 -- $files | grep '^+' | grep -v '^+++' | grep -nE '#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(' || true)
+if [ -n "$found" ]; then
+  echo "pre-commit: literal colours in the Worker's pages; use a brand role instead:" >&2
+  echo "$found" >&2
+  exit 1
+fi

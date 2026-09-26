@@ -52,6 +52,7 @@
   ],
   "publishConfig": { "access": "public" },
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
     "build": "bun run --filter '@volter/tunnel-core' build && bunx tsup client/tunnel-client.ts client/cli.ts --format esm --clean --out-dir dist && bun run --filter '@volter/tunnel-mcp' build",
     "prepublishOnly": "bunx tsup client/tunnel-client.ts client/cli.ts --format esm --clean --out-dir dist",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p packages/core/tsconfig.json && tsc --noEmit -p packages/mcp/tsconfig.json",

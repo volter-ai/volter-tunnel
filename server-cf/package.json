@@ -4,10 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --local",
-    "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "tokens": "node scripts/brand-tokens.mjs",
+    "dev": "npm run tokens && wrangler dev --local",
+    "deploy": "npm run tokens && wrangler deploy",
+    "typecheck": "npm run tokens && tsc --noEmit",
+    "test": "npm run tokens && vitest run"
   },
   "dependencies": {
     "@volter/identity": "^0.1.0",
