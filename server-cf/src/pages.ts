@@ -191,7 +191,7 @@ function shell(title: string, body: string): string {
   return `<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title>
-<meta name="description" content="volter-tunnel — free, stable, reservable tunnel URLs. An open-source ngrok alternative on Cloudflare's edge.">
+<meta name="description" content="Volter Tunnel — free, stable, reservable tunnel URLs. An open-source ngrok alternative on Cloudflare's edge.">
 <link rel="icon" href="${FAVICON}">
 <style>${BRAND_TOKENS_CSS}${STYLE}</style>
 </head><body><div class="npm-bar"></div>${body}</body></html>`;
@@ -199,7 +199,7 @@ function shell(title: string, body: string): string {
 
 function nav(): string {
   return `<header class="nav"><div class="wrap">
-    <a href="/" class="brand">${logoSvg(26)}volter-tunnel</a>
+    <a href="/" class="brand">${logoSvg(26)}Volter Tunnel</a>
     <nav>
       <a href="/#features">Features</a>
       <a href="/#start">Quickstart</a>
@@ -212,7 +212,7 @@ function nav(): string {
 function footer(): string {
   return `<footer><div class="wrap">
     <div class="brand-col">
-      <a href="/" class="brand">${logoSvg(22)}volter-tunnel</a>
+      <a href="/" class="brand">${logoSvg(22)}Volter Tunnel</a>
       <p>Open-source HTTP/WS reverse tunnel on Cloudflare's edge.</p>
     </div>
     <div class="links-col">
@@ -257,7 +257,7 @@ export function landingPage(domain: string): string {
     </div></div>
 
     <section id="features" class="bg-gray"><div class="wrap">
-      <h2>Why volter-tunnel</h2>
+      <h2>Why Volter Tunnel</h2>
       <p class="lede">Everything ngrok charges for at the free-tier boundary — given away, because idle tunnels are
         genuinely free to run on Cloudflare Durable Objects.</p>
       <div class="grid">
@@ -360,7 +360,7 @@ export function landingPage(domain: string): string {
       });
     })();
   </script>`;
-  return shell('volter-tunnel — free, stable tunnel URLs', body);
+  return shell('Volter Tunnel — free, stable tunnel URLs', body);
 }
 
 /** Getting-started documentation, served at /docs. */
@@ -445,7 +445,7 @@ tunnel.close();</code></pre>
     <p style="margin:34px 0 0"><a href="/">← Back to home</a> &nbsp;·&nbsp; <a href="/#waitlist">Request access</a></p>
   </main>
   ${footer()}`;
-  return shell('volter-tunnel — docs', body);
+  return shell('Volter Tunnel — docs', body);
 }
 
 /** A brand face named by the tokens (GET /fonts/<file>), or null. */
