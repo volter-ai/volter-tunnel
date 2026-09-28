@@ -15,7 +15,7 @@
 // does its version string in each VERSION_TEXT file. The workflow
 // then builds, publishes every version npm lacks, and commits the bump to main.
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const list = (name) => (process.env[name] ?? '').split(/\s+/).filter(Boolean);
@@ -37,7 +37,8 @@ const nextPatch = (version) => { const [major, minor, patch] = parse(version); r
 
 const packages = dirs.map((dir) => ({ dir, file: join(dir, 'package.json'), manifest: readJson(join(dir, 'package.json')) }));
 const byName = new Map(packages.map((pkg) => [pkg.manifest.name, pkg]));
-const fields = ['dependencies', 'peerDependencies', 'optionalDependencies', 'devDependencies'];
+// What a consumer installs; a devDependency never leaves the repository.
+const fields = ['dependencies', 'peerDependencies', 'optionalDependencies'];
 const exact = (range) => /^\d/.test(range) || range.startsWith('workspace:');
 
 function changed({ dir, file }) {
@@ -63,7 +64,10 @@ for (let grew = true; grew;) {
 const bumped = new Map();
 for (const name of release) {
   const { manifest } = byName.get(name);
-  if (!onNpm(`${name}@${manifest.version}`)) { bumped.set(name, { from: manifest.version, to: manifest.version }); continue; }
+  // A version this workflow's own release commit set was published by it, even while npm still
+  // holds it as staged and `npm view` says it is absent; anything else npm lacks goes out as it is.
+  const setByRelease = git('log', '-1', '--format=%an', '-G', '"version":', '--', byName.get(name).file) === 'github-actions[bot]';
+  if (!setByRelease && !onNpm(`${name}@${manifest.version}`)) { bumped.set(name, { from: manifest.version, to: manifest.version }); continue; }
   const latest = onNpm(name);
   const base = latest && newer(latest, manifest.version) ? latest : manifest.version;
   bumped.set(name, { from: manifest.version, to: nextPatch(base) });
@@ -85,13 +89,13 @@ for (const { file, manifest } of packages) {
   for (const field of fields) if (next[field]) next[field] = repin(next[field]);
   if (JSON.stringify(next) !== JSON.stringify(manifest)) writeJson(file, next);
 }
-for (const file of list('PIN_FILES')) {
+for (const file of list('PIN_FILES').filter((file) => existsSync(file))) {
   const value = readJson(file); const next = repin(value);
   if (JSON.stringify(next) !== JSON.stringify(value)) writeJson(file, next);
 }
 for (const entry of list('VERSION_TEXT')) {
   const [file, name] = entry.split('=');
-  const bump = bumped.get(name); if (!bump) continue;
+  const bump = bumped.get(name); if (!bump || !existsSync(file)) continue;
   writeFileSync(file, readFileSync(file, 'utf8').split(`'${bump.from}'`).join(`'${bump.to}'`).split(`"${bump.from}"`).join(`"${bump.to}"`));
 }
 
