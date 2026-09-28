@@ -40,7 +40,7 @@ jobs:
       - name: Install relay deps
         run: cd server-cf && bun install --frozen-lockfile
       - name: Test (real workerd)
-        run: cd server-cf && bunx vitest run
+        run: cd server-cf && node scripts/brand-tokens.mjs && bunx vitest run
       - name: Deploy
         run: cd server-cf && bunx wrangler deploy
         env:

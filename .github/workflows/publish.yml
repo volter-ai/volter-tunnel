@@ -1,0 +1,79 @@
+# Autopublish: every push to main releases what it changed. autorelease.mjs
+# moves each changed package (and what pins it exactly) to its next patch
+# version; the packages are built and every version npm lacks is published,
+# core first (`bun publish` rewrites the root's pin on it); the version commit
+# goes back to main. Auth is the repository secret NPM_TOKEN (an npm automation
+# token with write on the @volter scope).
+name: publish
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: publish
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      PACKAGES: packages/core . packages/mcp
+      PATHS: .=client,package.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: git config core.fileMode false
+      - name: Version what changed since its last release
+        id: release
+        run: node .github/autorelease.mjs
+      - if: steps.release.outputs.released
+        name: The lockfile follows the versions
+        run: bun install
+      - name: The files the release changed
+        run: git diff --name-only > "$RUNNER_TEMP/release-files"
+      - name: Which versions npm lacks
+        id: check
+        run: |
+          new=""
+          for dir in $PACKAGES; do
+            spec="$(node -p "const p=require('./$dir/package.json'); p.name+'@'+p.version")"
+            if [ -n "$(npm view "$spec" version 2>/dev/null)" ]; then echo "$spec is published"; else echo "$spec is new"; new="$new $dir"; fi
+          done
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+      - if: steps.check.outputs.new
+        run: bun install --frozen-lockfile
+      - if: steps.check.outputs.new
+        run: bun run build
+      - if: steps.check.outputs.new
+        name: Publish
+        env:
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for dir in ${{ steps.check.outputs.new }}; do
+            if ! (cd "$dir" && bun publish --access public 2>"$RUNNER_TEMP/err"); then
+              cat "$RUNNER_TEMP/err"
+              grep -qi 'cannot publish over' "$RUNNER_TEMP/err" || exit 1
+            fi
+          done
+      - name: The version commit goes back to main
+        run: |
+          [ -s "$RUNNER_TEMP/release-files" ] || exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add $(cat "$RUNNER_TEMP/release-files")
+          git commit -qm "Release $(for dir in $PACKAGES; do git diff --cached --quiet -- "$dir/package.json" || node -p "const p=require('./$dir/package.json'); p.name+'@'+p.version"; done | tr '\n' ' ')"
+          git reset -q --hard HEAD
+          for attempt in 1 2 3 4 5; do
+            if git pull -q --rebase origin main; then git push -q origin HEAD:main && exit 0; else git rebase --abort; fi
+            sleep 5
+          done
+          exit 1

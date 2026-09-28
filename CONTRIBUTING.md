@@ -27,10 +27,11 @@ bun run typecheck                 # client + core + mcp
 cd packages/core && bun test      # protocol contract (100% gate)
 cd packages/mcp  && bun test      # MCP tools (coverage gate)
 bun test ./test                   # client SDK + CLI
-cd server-cf && npm install && npx vitest run   # relay (real workerd)
+cd server-cf && npm install && npm test          # relay (real workerd; writes the brand tokens first)
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of the above on every PR.
+Every push to `main` is released: the `publish` workflow moves each package that changed to its next patch
+version, publishes it to npm and commits the version back.
 
 ## Ground rules
 
