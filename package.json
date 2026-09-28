@@ -1,6 +1,6 @@
 {
   "name": "@volter/tunnel",
-  "version": "2.0.5",
+  "version": "2.0.6",
   "description": "WebSocket HTTP/WS reverse tunnel client — embeddable library (createTunnel) + CLI + a typed relay SDK (VolterClient).",
   "repository": {
     "type": "git",
@@ -50,7 +50,9 @@
     "client",
     "README.md"
   ],
-  "publishConfig": { "access": "public" },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
     "build": "bun run --filter '@volter/tunnel-core' build && bunx tsup client/tunnel-client.ts client/cli.ts --format esm --clean --out-dir dist && bun run --filter '@volter/tunnel-mcp' build",
