@@ -13,6 +13,7 @@ concurrency:
   group: publish
   cancel-in-progress: false
 permissions:
+  actions: read
   contents: write
   id-token: write
 jobs:
@@ -33,6 +34,13 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      # The client keeps its person's device credential, so a lockfile changed since the last release is scanned before
+      # anything installs, and a finding stops the release (company decision 0038).
+      - name: Release scan
+        run: node .github/release-scan.mjs bun.lock
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_SCAN_WORKFLOW: publish.yml
       - name: An npm that publishes through a trusted publisher
         run: npm install -g npm@latest
       - run: git config core.fileMode false

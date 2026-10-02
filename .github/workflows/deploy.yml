@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     permissions:
+      actions: read
       contents: read
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +36,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # The relay signs its people's tunnel tokens and carries their traffic, so a lockfile changed since the last
+      # deploy is scanned before anything installs, and a finding stops the deploy (company decision 0038).
+      - name: Release scan
+        run: node .github/release-scan.mjs bun.lock server-cf/bun.lock
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_SCAN_WORKFLOW: deploy.yml
       - name: Install root deps (provides jsonwebtoken for the CF tests)
         run: bun install --frozen-lockfile
       - name: Install relay deps
