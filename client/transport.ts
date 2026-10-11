@@ -142,22 +142,50 @@ export function safeClose(ws: WebSocket, code?: number, reason?: string): void {
  * Tries 127.0.0.1 (IPv4) first, then ::1 (IPv6).
  * Returns the working address, or '127.0.0.1' as default.
  */
+/** Whether something accepts a connection on a loopback address and port, within half a second. */
+function accepts(addr: string, port: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const sock = net.connect({ host: addr, port }, () => {
+      sock.destroy();
+      resolve(true);
+    });
+    sock.on('error', () => resolve(false));
+    sock.setTimeout(500, () => {
+      sock.destroy();
+      resolve(false);
+    });
+  });
+}
+
 export async function resolveLocalHost(port: number): Promise<string> {
   for (const addr of ['127.0.0.1', '::1']) {
-    const ok = await new Promise<boolean>((resolve) => {
-      const sock = net.connect({ host: addr, port }, () => {
-        sock.destroy();
-        resolve(true);
-      });
-      sock.on('error', () => resolve(false));
-      sock.setTimeout(500, () => {
-        sock.destroy();
-        resolve(false);
-      });
-    });
-    if (ok) return addr;
+    if (await accepts(addr, port)) return addr;
   }
   return '127.0.0.1';
+}
+
+/** Bun's own ws client, which a bare `ws` import gets under Bun, writes the Host line from the URL. */
+const bunWsClient = typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined';
+
+/**
+ * Where the local WebSocket is dialed and the `host` header passed with it, so that the upgrade carries exactly one
+ * Host line, `localhost:<port>` as the HTTP relay sends, and reaches the address the HTTP relay reaches.
+ *
+ * The ws library under Node writes a passed `host` header as the only Host line: the address is dialed and the header
+ * names localhost. Bun's client writes the URL's host and sends a passed `host` header as a second line, which Go's
+ * net/http refuses and workerd answers with 500; so under Bun no header is passed and the URL names localhost. Bun
+ * reaches whichever loopback family listens, and ::1 first when both do. When the relay's address is 127.0.0.1 and ::1
+ * also accepts on the port, the URL names the address, and that upgrade's Host is the address: the server the HTTP
+ * relay reaches matters more than the name it is called by.
+ */
+export async function localWsTarget(
+  port: number,
+  localAddr: string
+): Promise<{ authority: string; host?: string }> {
+  const address = `${localAddr.includes(':') ? `[${localAddr}]` : localAddr}:${port}`;
+  if (!bunWsClient) return { authority: address, host: `localhost:${port}` };
+  if (localAddr === '127.0.0.1' && (await accepts('::1', port))) return { authority: address };
+  return { authority: `localhost:${port}` };
 }
 
 /**
@@ -173,8 +201,20 @@ export function handleWsUpgrade(
   localWsConnections: Map<CorrelationId, WebSocket>,
   log: TunnelLogger
 ): void {
-  const wsHost = localAddr.includes(':') ? `[${localAddr}]` : localAddr;
-  const localWsUrl = `ws://${wsHost}:${port}${msg.path}`;
+  void localWsTarget(port, localAddr).then((target) =>
+    openLocalWs(port, target, controlWs, msg, localWsConnections, log)
+  );
+}
+
+function openLocalWs(
+  port: number,
+  target: { authority: string; host?: string },
+  controlWs: WebSocket,
+  msg: WsUpgradeMsg,
+  localWsConnections: Map<CorrelationId, WebSocket>,
+  log: TunnelLogger
+): void {
+  const localWsUrl = `ws://${target.authority}${msg.path}`;
 
   // Forward the WebSocket subprotocol from the original browser request.
   // Vite 6.x requires "vite-hmr" — without it, the upgrade is silently ignored.
@@ -200,10 +240,9 @@ export function handleWsUpgrade(
     headers['x-forwarded-host'] = headers.host;
   }
   headers['x-forwarded-proto'] = 'https';
-  // The local Host is the URL's, and the ws client writes it. A `host` header passed here as well is sent as a second
-  // Host line by Bun's client, and a server that refuses a duplicated Host (Go's net/http, so LiveKit) answers the
-  // upgrade with 400: the relay then never opens.
-  delete headers.host;
+  // One Host line, localhost: see localWsTarget for which client needs the header and which must not be given it.
+  if (target.host) headers.host = target.host;
+  else delete headers.host;
   headers.origin = `http://localhost:${port}`;
   for (const hopByHop of [
     'connection',
