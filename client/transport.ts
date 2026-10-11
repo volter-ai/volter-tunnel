@@ -142,24 +142,20 @@ export function safeClose(ws: WebSocket, code?: number, reason?: string): void {
  * Tries 127.0.0.1 (IPv4) first, then ::1 (IPv6).
  * Returns the working address, or '127.0.0.1' as default.
  */
-/** Whether something accepts a connection on a loopback address and port, within half a second. */
-function accepts(addr: string, port: number): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const sock = net.connect({ host: addr, port }, () => {
-      sock.destroy();
-      resolve(true);
-    });
-    sock.on('error', () => resolve(false));
-    sock.setTimeout(500, () => {
-      sock.destroy();
-      resolve(false);
-    });
-  });
-}
-
 export async function resolveLocalHost(port: number): Promise<string> {
   for (const addr of ['127.0.0.1', '::1']) {
-    if (await accepts(addr, port)) return addr;
+    const ok = await new Promise<boolean>((resolve) => {
+      const sock = net.connect({ host: addr, port }, () => {
+        sock.destroy();
+        resolve(true);
+      });
+      sock.on('error', () => resolve(false));
+      sock.setTimeout(500, () => {
+        sock.destroy();
+        resolve(false);
+      });
+    });
+    if (ok) return addr;
   }
   return '127.0.0.1';
 }
@@ -168,24 +164,17 @@ export async function resolveLocalHost(port: number): Promise<string> {
 const bunWsClient = typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined';
 
 /**
- * Where the local WebSocket is dialed and the `host` header passed with it, so that the upgrade carries exactly one
- * Host line, `localhost:<port>` as the HTTP relay sends, and reaches the address the HTTP relay reaches.
+ * The `host` header passed with the local upgrade, which always dials the relay's own address so that it reaches the
+ * server the HTTP relay reaches.
  *
- * The ws library under Node writes a passed `host` header as the only Host line: the address is dialed and the header
- * names localhost. Bun's client writes the URL's host and sends a passed `host` header as a second line, which Go's
- * net/http refuses and workerd answers with 500; so under Bun no header is passed and the URL names localhost. Bun
- * reaches whichever loopback family listens, and ::1 first when both do. When the relay's address is 127.0.0.1 and ::1
- * also accepts on the port, the URL names the address, and that upgrade's Host is the address: the server the HTTP
- * relay reaches matters more than the name it is called by.
+ * The ws library under Node writes a passed `host` header as the only Host line, so the upgrade says
+ * `localhost:<port>` as the HTTP relay does. Bun's client writes the URL's host and sends a passed `host` header as a
+ * second line, which Go's net/http refuses and workerd answers with 500; so under Bun none is passed and the upgrade's
+ * Host is the dialed address. Naming localhost in the URL instead would let Bun choose the loopback family (::1 when
+ * both listen), and the real ws package does not complete an upgrade under Bun 1.2.20: the address is kept over the name.
  */
-export async function localWsTarget(
-  port: number,
-  localAddr: string
-): Promise<{ authority: string; host?: string }> {
-  const address = `${localAddr.includes(':') ? `[${localAddr}]` : localAddr}:${port}`;
-  if (!bunWsClient) return { authority: address, host: `localhost:${port}` };
-  if (localAddr === '127.0.0.1' && (await accepts('::1', port))) return { authority: address };
-  return { authority: `localhost:${port}` };
+function localWsHostHeader(port: number): string | undefined {
+  return bunWsClient ? undefined : `localhost:${port}`;
 }
 
 /**
@@ -201,20 +190,8 @@ export function handleWsUpgrade(
   localWsConnections: Map<CorrelationId, WebSocket>,
   log: TunnelLogger
 ): void {
-  void localWsTarget(port, localAddr).then((target) =>
-    openLocalWs(port, target, controlWs, msg, localWsConnections, log)
-  );
-}
-
-function openLocalWs(
-  port: number,
-  target: { authority: string; host?: string },
-  controlWs: WebSocket,
-  msg: WsUpgradeMsg,
-  localWsConnections: Map<CorrelationId, WebSocket>,
-  log: TunnelLogger
-): void {
-  const localWsUrl = `ws://${target.authority}${msg.path}`;
+  const wsHost = localAddr.includes(':') ? `[${localAddr}]` : localAddr;
+  const localWsUrl = `ws://${wsHost}:${port}${msg.path}`;
 
   // Forward the WebSocket subprotocol from the original browser request.
   // Vite 6.x requires "vite-hmr" — without it, the upgrade is silently ignored.
@@ -240,8 +217,9 @@ function openLocalWs(
     headers['x-forwarded-host'] = headers.host;
   }
   headers['x-forwarded-proto'] = 'https';
-  // One Host line, localhost: see localWsTarget for which client needs the header and which must not be given it.
-  if (target.host) headers.host = target.host;
+  // Exactly one Host line: see localWsHostHeader for which client is given the header and which must not be.
+  const hostHeader = localWsHostHeader(port);
+  if (hostHeader) headers.host = hostHeader;
   else delete headers.host;
   headers.origin = `http://localhost:${port}`;
   for (const hopByHop of [
@@ -256,6 +234,8 @@ function openLocalWs(
   }
 
   const localWs = new WebSocket(localWsUrl, protocols, { headers });
+  // Known from the moment it is dialed: a relayed close or the tunnel's teardown reaches a socket still connecting.
+  localWsConnections.set(msg.connId, localWs);
 
   const connectTimeout = setTimeout(() => {
     log.warn(
@@ -263,6 +243,7 @@ function openLocalWs(
       `[WS-RELAY] Connection timeout for connId=${msg.connId}`
     );
     safeClose(localWs);
+    if (localWsConnections.get(msg.connId) === localWs) localWsConnections.delete(msg.connId);
     if (controlWs.readyState === WebSocket.OPEN) {
       controlWs.send(
         JSON.stringify({
