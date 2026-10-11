@@ -160,6 +160,23 @@ export async function resolveLocalHost(port: number): Promise<string> {
   return '127.0.0.1';
 }
 
+/** Bun's own ws client, which a bare `ws` import gets under Bun, writes the Host line from the URL. */
+const bunWsClient = typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined';
+
+/**
+ * The `host` header passed with the local upgrade, which always dials the relay's own address so that it reaches the
+ * server the HTTP relay reaches.
+ *
+ * The ws library under Node writes a passed `host` header as the only Host line, so the upgrade says
+ * `localhost:<port>` as the HTTP relay does. Bun's client writes the URL's host and sends a passed `host` header as a
+ * second line, which Go's net/http refuses and workerd answers with 500; so under Bun none is passed and the upgrade's
+ * Host is the dialed address. Naming localhost in the URL instead would let Bun choose the loopback family (::1 when
+ * both listen), and the real ws package does not complete an upgrade under Bun 1.2.20: the address is kept over the name.
+ */
+function localWsHostHeader(port: number): string | undefined {
+  return bunWsClient ? undefined : `localhost:${port}`;
+}
+
 /**
  * Handle a WebSocket upgrade request from the tunnel server.
  * Uses the `ws` library to connect to the local server (avoids Bun segfault
@@ -200,7 +217,10 @@ export function handleWsUpgrade(
     headers['x-forwarded-host'] = headers.host;
   }
   headers['x-forwarded-proto'] = 'https';
-  headers.host = `localhost:${port}`;
+  // Exactly one Host line: see localWsHostHeader for which client is given the header and which must not be.
+  const hostHeader = localWsHostHeader(port);
+  if (hostHeader) headers.host = hostHeader;
+  else delete headers.host;
   headers.origin = `http://localhost:${port}`;
   for (const hopByHop of [
     'connection',
@@ -214,6 +234,8 @@ export function handleWsUpgrade(
   }
 
   const localWs = new WebSocket(localWsUrl, protocols, { headers });
+  // Known from the moment it is dialed: a relayed close or the tunnel's teardown reaches a socket still connecting.
+  localWsConnections.set(msg.connId, localWs);
 
   const connectTimeout = setTimeout(() => {
     log.warn(
@@ -221,6 +243,7 @@ export function handleWsUpgrade(
       `[WS-RELAY] Connection timeout for connId=${msg.connId}`
     );
     safeClose(localWs);
+    if (localWsConnections.get(msg.connId) === localWs) localWsConnections.delete(msg.connId);
     if (controlWs.readyState === WebSocket.OPEN) {
       controlWs.send(
         JSON.stringify({
@@ -232,7 +255,9 @@ export function handleWsUpgrade(
     }
   }, 15000);
 
+  let opened = false;
   localWs.on('open', () => {
+    opened = true;
     clearTimeout(connectTimeout);
     localWsConnections.set(msg.connId, localWs);
 
@@ -268,6 +293,22 @@ export function handleWsUpgrade(
       { component: 'tunnel_client', action: 'ws_relay_local_close', connId: msg.connId, code },
       `[WS-RELAY] Local WS closed connId=${msg.connId} code=${code}`
     );
+    if (!opened) {
+      // The local server refused the upgrade (Bun reports it as a close, with no error). The browser's socket is
+      // still waiting on ws-ready, and a ws-close does not end that wait: say it failed, now, not at the timeout.
+      clearTimeout(connectTimeout);
+      if (controlWs.readyState === WebSocket.OPEN) {
+        controlWs.send(
+          JSON.stringify({
+            type: 'ws-error',
+            connId: msg.connId,
+            error: `Local WebSocket closed before it opened (code ${code})`,
+          })
+        );
+      }
+      localWsConnections.delete(msg.connId);
+      return;
+    }
     if (controlWs.readyState === WebSocket.OPEN) {
       controlWs.send(
         JSON.stringify({
