@@ -200,7 +200,10 @@ export function handleWsUpgrade(
     headers['x-forwarded-host'] = headers.host;
   }
   headers['x-forwarded-proto'] = 'https';
-  headers.host = `localhost:${port}`;
+  // The local Host is the URL's, and the ws client writes it. A `host` header passed here as well is sent as a second
+  // Host line by Bun's client, and a server that refuses a duplicated Host (Go's net/http, so LiveKit) answers the
+  // upgrade with 400: the relay then never opens.
+  delete headers.host;
   headers.origin = `http://localhost:${port}`;
   for (const hopByHop of [
     'connection',
@@ -232,7 +235,9 @@ export function handleWsUpgrade(
     }
   }, 15000);
 
+  let opened = false;
   localWs.on('open', () => {
+    opened = true;
     clearTimeout(connectTimeout);
     localWsConnections.set(msg.connId, localWs);
 
@@ -268,6 +273,22 @@ export function handleWsUpgrade(
       { component: 'tunnel_client', action: 'ws_relay_local_close', connId: msg.connId, code },
       `[WS-RELAY] Local WS closed connId=${msg.connId} code=${code}`
     );
+    if (!opened) {
+      // The local server refused the upgrade (Bun reports it as a close, with no error). The browser's socket is
+      // still waiting on ws-ready, and a ws-close does not end that wait: say it failed, now, not at the timeout.
+      clearTimeout(connectTimeout);
+      if (controlWs.readyState === WebSocket.OPEN) {
+        controlWs.send(
+          JSON.stringify({
+            type: 'ws-error',
+            connId: msg.connId,
+            error: `Local WebSocket closed before it opened (code ${code})`,
+          })
+        );
+      }
+      localWsConnections.delete(msg.connId);
+      return;
+    }
     if (controlWs.readyState === WebSocket.OPEN) {
       controlWs.send(
         JSON.stringify({
