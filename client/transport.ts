@@ -346,7 +346,7 @@ export function handleWsUpgrade(
   });
 }
 
-function send502(ws: WebSocket, reqId: CorrelationId, message: string): void {
+export function send502(ws: WebSocket, reqId: CorrelationId, message: string): void {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(
       JSON.stringify({
@@ -370,6 +370,7 @@ export function forwardRequest(
   msg: RequestMsg,
   ws: WebSocket,
   activeRequests: Map<CorrelationId, http.ClientRequest>,
+  log: TunnelLogger,
   onConnRefused?: (err: NodeJS.ErrnoException) => Promise<boolean>
 ): http.ClientRequest {
   const headers: Record<string, string | string[] | undefined> = { ...msg.headers };
@@ -451,10 +452,28 @@ export function forwardRequest(
 
     // If ECONNREFUSED and caller wants to retry with re-resolved address, let them
     if (onConnRefused && err.code === 'ECONNREFUSED') {
-      onConnRefused(err).then((retried) => {
-        if (retried) return; // caller handled it
-        send502(ws, msg.reqId, err.message);
-      });
+      const retry = onConnRefused;
+      Promise.resolve()
+        .then(() => retry(err))
+        .then((retried) => {
+          if (retried) return; // caller handled it
+          send502(ws, msg.reqId, err.message);
+        })
+        .catch((error: unknown) => {
+          activeRequests.delete(msg.reqId);
+          const message = error instanceof Error ? error.message : String(error);
+          log.warn(
+            {
+              component: 'tunnel_client',
+              action: 'request_retry_error',
+              reqId: msg.reqId,
+              path: msg.path,
+              error: message,
+            },
+            `Failed to retry request reqId=${msg.reqId} path=${msg.path}: ${message}`
+          );
+          send502(ws, msg.reqId, message);
+        });
       return;
     }
 

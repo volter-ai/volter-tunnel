@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createTunnel, DEFAULT_HOST, type TunnelLogger, type TunnelOptions, VolterClient } from './tunnel-client';
+import { createTunnel, DEFAULT_HOST, type TunnelHandle, type TunnelLogger, type TunnelOptions, VolterClient } from './tunnel-client';
 import { formatUsage, formatWhoami } from './format';
 
 /** True when this file is the process entry (run as the bin), false when merely
@@ -337,18 +337,9 @@ if (invokedDirectly()) {
     const i = basicAuthArg.indexOf(':');
     if (i > 0) opts.basicAuth = { user: basicAuthArg.slice(0, i), pass: basicAuthArg.slice(i + 1) };
   }
-  const handle = await createTunnel(opts);
-  console.log(handle.url); // stdout stays machine-readable (just the URL)
-
-  // Human-facing connection banner + optional QR → stderr, only on a real TTY
-  // (so piped/non-interactive use stays clean).
-  if (process.stderr.isTTY) {
-    process.stderr.write(formatConnectBanner(handle.url, port) + '\n');
-    if (!args.includes('--no-qr')) await renderQr(handle.url, (s) => process.stderr.write(s));
-  }
-
+  let handle: TunnelHandle | undefined;
   const shutdown = () => {
-    handle.close();
+    handle?.close();
     process.exit(0);
   };
   process.on('SIGTERM', () => {
@@ -359,4 +350,14 @@ if (invokedDirectly()) {
     logLifecycle('Tunnel client received SIGINT');
     shutdown();
   });
+
+  handle = await createTunnel(opts);
+  console.log(handle.url); // stdout stays machine-readable (just the URL)
+
+  // Human-facing connection banner + optional QR → stderr, only on a real TTY
+  // (so piped/non-interactive use stays clean).
+  if (process.stderr.isTTY) {
+    process.stderr.write(formatConnectBanner(handle.url, port) + '\n');
+    if (!args.includes('--no-qr')) await renderQr(handle.url, (s) => process.stderr.write(s));
+  }
 }

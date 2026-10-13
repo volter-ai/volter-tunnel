@@ -7,7 +7,7 @@
 import type http from 'node:http';
 import WebSocket from 'ws';
 import type { CorrelationId, RelayToClient } from '@volter/tunnel-core';
-import { forwardRequest, handleWsUpgrade, http1Agent, resolveLocalHost, safeClose } from './transport';
+import { forwardRequest, handleWsUpgrade, http1Agent, resolveLocalHost, safeClose, send502 } from './transport';
 import type { TunnelHandle, TunnelLogger, TunnelOptions } from './types';
 
 export type { TunnelHandle, TunnelLogger, TunnelOptions } from './types';
@@ -124,7 +124,7 @@ export function createTunnel({
       );
     });
 
-    ws.on('message', async (data: WebSocket.RawData) => {
+    ws.on('message', (data: WebSocket.RawData) => {
       let msg: RelayToClient;
       try {
         msg = JSON.parse(data.toString());
@@ -221,30 +221,46 @@ export function createTunnel({
       }
 
       if (msg.type === 'request') {
-        const localReq = forwardRequest(port, localHost, msg, ws, activeRequests, async (err) => {
-          // On ECONNREFUSED, re-resolve loopback and retry once
-          if (err.code === 'ECONNREFUSED') {
-            const newAddr = await resolveLocalHost(port);
-            if (newAddr !== localHost) {
-              log.info(
-                {
-                  component: 'tunnel_client',
-                  action: 're_resolved_local_host',
-                  port,
-                  from: localHost,
-                  to: newAddr,
-                },
-                `Loopback changed from ${localHost} to ${newAddr} for port ${port}`
-              );
-              localHost = newAddr;
-              const retryReq = forwardRequest(port, localHost, msg, ws, activeRequests);
-              activeRequests.set(msg.reqId, retryReq);
-              return true; // suppressed the error
+        try {
+          const localReq = forwardRequest(port, localHost, msg, ws, activeRequests, log, async (err) => {
+            // On ECONNREFUSED, re-resolve loopback and retry once
+            if (err.code === 'ECONNREFUSED') {
+              const newAddr = await resolveLocalHost(port);
+              if (newAddr !== localHost) {
+                log.info(
+                  {
+                    component: 'tunnel_client',
+                    action: 're_resolved_local_host',
+                    port,
+                    from: localHost,
+                    to: newAddr,
+                  },
+                  `Loopback changed from ${localHost} to ${newAddr} for port ${port}`
+                );
+                localHost = newAddr;
+                const retryReq = forwardRequest(port, localHost, msg, ws, activeRequests, log);
+                activeRequests.set(msg.reqId, retryReq);
+                return true; // suppressed the error
+              }
             }
-          }
-          return false;
-        });
-        activeRequests.set(msg.reqId, localReq);
+            return false;
+          });
+          activeRequests.set(msg.reqId, localReq);
+        } catch (error) {
+          activeRequests.delete(msg.reqId);
+          const message = error instanceof Error ? error.message : String(error);
+          log.warn(
+            {
+              component: 'tunnel_client',
+              action: 'request_forward_error',
+              reqId: msg.reqId,
+              path: msg.path,
+              error: message,
+            },
+            `Failed to forward request reqId=${msg.reqId} path=${msg.path}: ${message}`
+          );
+          send502(ws, msg.reqId, message);
+        }
       }
 
       if (msg.type === 'request-abort') {
@@ -267,7 +283,18 @@ export function createTunnel({
           },
           `[WS-RELAY] Received ws-upgrade connId=${msg.connId}`
         );
-        handleWsUpgrade(port, localHost, ws, msg, localWsConnections, log);
+        try {
+          handleWsUpgrade(port, localHost, ws, msg, localWsConnections, log);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          log.warn(
+            { component: 'tunnel_client', action: 'ws_upgrade_error', connId: msg.connId, path: msg.path, error: message },
+            `Failed to upgrade WebSocket connId=${msg.connId} path=${msg.path}: ${message}`
+          );
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ws-error', connId: msg.connId, error: message }));
+          }
+        }
       }
 
       if (msg.type === 'ws-message') {
