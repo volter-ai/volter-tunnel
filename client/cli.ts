@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createTunnel, DEFAULT_HOST, type TunnelLogger, type TunnelOptions, VolterClient } from './tunnel-client';
+import { createTunnel, DEFAULT_HOST, type TunnelHandle, type TunnelLogger, type TunnelOptions, VolterClient } from './tunnel-client';
 import { formatUsage, formatWhoami } from './format';
 
 /** True when this file is the process entry (run as the bin), false when merely
@@ -206,6 +206,18 @@ export async function runAccount(
 }
 
 if (invokedDirectly()) {
+  // Write synchronously: exit handlers cannot wait for stderr to flush.
+  const logLifecycle = (message: string) => {
+    fs.writeSync(2, message.replace(/[\r\n]+/g, ' ') + '\n');
+  };
+  const fatal = (kind: string, error: unknown) => {
+    logLifecycle(`${kind}: ${error instanceof Error ? error.stack || error.message : String(error)}`);
+    process.exit(1);
+  };
+  process.on('exit', (code) => logLifecycle(`Tunnel client exiting with code ${code}`));
+  process.on('uncaughtException', (error) => fatal('Uncaught exception', error));
+  process.on('unhandledRejection', (reason) => fatal('Unhandled rejection', reason));
+
   const args = process.argv.slice(2);
 
   function flag(name: string): string | undefined {
@@ -325,7 +337,21 @@ if (invokedDirectly()) {
     const i = basicAuthArg.indexOf(':');
     if (i > 0) opts.basicAuth = { user: basicAuthArg.slice(0, i), pass: basicAuthArg.slice(i + 1) };
   }
-  const handle = await createTunnel(opts);
+  let handle: TunnelHandle | undefined;
+  const shutdown = () => {
+    handle?.close();
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => {
+    logLifecycle('Tunnel client received SIGTERM');
+    shutdown();
+  });
+  process.on('SIGINT', () => {
+    logLifecycle('Tunnel client received SIGINT');
+    shutdown();
+  });
+
+  handle = await createTunnel(opts);
   console.log(handle.url); // stdout stays machine-readable (just the URL)
 
   // Human-facing connection banner + optional QR → stderr, only on a real TTY
@@ -334,11 +360,4 @@ if (invokedDirectly()) {
     process.stderr.write(formatConnectBanner(handle.url, port) + '\n');
     if (!args.includes('--no-qr')) await renderQr(handle.url, (s) => process.stderr.write(s));
   }
-
-  const shutdown = () => {
-    handle.close();
-    process.exit(0);
-  };
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
 }
