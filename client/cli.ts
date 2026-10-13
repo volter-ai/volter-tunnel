@@ -206,6 +206,18 @@ export async function runAccount(
 }
 
 if (invokedDirectly()) {
+  // Write synchronously: exit handlers cannot wait for stderr to flush.
+  const logLifecycle = (message: string) => {
+    fs.writeSync(2, message.replace(/[\r\n]+/g, ' ') + '\n');
+  };
+  const fatal = (kind: string, error: unknown) => {
+    logLifecycle(`${kind}: ${error instanceof Error ? error.stack || error.message : String(error)}`);
+    process.exit(1);
+  };
+  process.on('exit', (code) => logLifecycle(`Tunnel client exiting with code ${code}`));
+  process.on('uncaughtException', (error) => fatal('Uncaught exception', error));
+  process.on('unhandledRejection', (reason) => fatal('Unhandled rejection', reason));
+
   const args = process.argv.slice(2);
 
   function flag(name: string): string | undefined {
@@ -339,6 +351,12 @@ if (invokedDirectly()) {
     handle.close();
     process.exit(0);
   };
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', () => {
+    logLifecycle('Tunnel client received SIGTERM');
+    shutdown();
+  });
+  process.on('SIGINT', () => {
+    logLifecycle('Tunnel client received SIGINT');
+    shutdown();
+  });
 }

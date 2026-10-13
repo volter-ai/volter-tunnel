@@ -57,6 +57,29 @@ export function createTunnel({
   // fail (close without receiving 'registered') will still retry instead of giving up.
   let everRegistered = false;
 
+  function scheduleReconnect(onRegistered: (handle: TunnelHandle) => void, registered: boolean): void {
+    if (closed) return;
+    const delay = reconnectDelay;
+    reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+    log.info(
+      { component: 'tunnel_client', action: 'reconnecting', port, delay, registered },
+      `Tunnel disconnected, reconnecting in ${delay}ms`
+    );
+    // Keep this timer referenced so a failed attempt cannot drain the event loop.
+    setTimeout(() => {
+      if (closed) return;
+      try {
+        connect(onRegistered, null);
+      } catch (err) {
+        log.warn(
+          { component: 'tunnel_client', action: 'reconnect_error', port, error: String(err) },
+          `Tunnel reconnect failed: ${err}`
+        );
+        scheduleReconnect(onRegistered, false);
+      }
+    }, delay);
+  }
+
   function connect(onRegistered: (handle: TunnelHandle) => void, onFirstError: ((err: Error) => void) | null): void {
     if (closed) return;
 
@@ -297,10 +320,6 @@ export function createTunnel({
 
       if (closed) return;
 
-      // Reconnect with exponential backoff
-      const delay = reconnectDelay;
-      reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
-
       if (!registered && !everRegistered) {
         // This connect attempt never registered and we've never had a successful
         // registration — caller got the error via onFirstError, don't retry.
@@ -311,11 +330,7 @@ export function createTunnel({
         return;
       }
 
-      log.info(
-        { component: 'tunnel_client', action: 'reconnecting', port, delay, registered },
-        `Tunnel disconnected, reconnecting in ${delay}ms`
-      );
-      setTimeout(() => connect(onRegistered, null), delay);
+      scheduleReconnect(onRegistered, registered);
     });
   }
 
@@ -333,6 +348,6 @@ export function createTunnel({
         (handle) => resolve(handle),
         (err) => reject(err)
       );
-    });
+    }).catch(reject);
   });
 }
