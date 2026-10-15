@@ -243,12 +243,17 @@ export function parseHeaderRules(raw: string | undefined): HeaderRules {
  * cookie.
  */
 export function buildResponseHeaders(
-  downstream: Record<string, string>,
+  downstream: Record<string, string | string[]>,
   request: Request,
   bootstrapCookie: string | null,
   rules?: HeaderRules
 ): Headers {
-  const headers = { ...downstream };
+  // A header the origin sent more than once arrives as an array (Node's `set-cookie`). Cookies keep one line each:
+  // joined with commas, the browser reads the joined cookies' attributes as the first's, so a second cookie's
+  // `Max-Age=0` deletes the first. Any other repeated header is one comma-joined value, as HTTP allows.
+  const cookies = ([] as string[]).concat(downstream['set-cookie'] ?? []);
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(downstream)) if (k !== 'set-cookie') headers[k] = Array.isArray(v) ? v.join(', ') : v;
   for (const k of [
     'transfer-encoding',
     'connection',
@@ -308,6 +313,7 @@ export function buildResponseHeaders(
     if (v != null) out.set(k, v);
   }
   for (const [k, v] of Object.entries(corsHeaders(request))) out.set(k, v);
+  if (!rules?.remove?.includes('set-cookie') && !Object.hasOwn(rules?.set ?? {}, 'set-cookie')) for (const cookie of cookies) out.append('set-cookie', cookie);
   if (bootstrapCookie) out.append('set-cookie', bootstrapCookie);
   return out;
 }
