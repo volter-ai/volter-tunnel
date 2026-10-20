@@ -107,12 +107,16 @@ export function createTunnel({
     // Track active HTTP requests for abort support: reqId → http.ClientRequest
     const activeRequests = new Map<CorrelationId, http.ClientRequest>();
 
+    // A socket still connecting when it is closed may never say 'close' (Bun's): the timeout ends this attempt itself,
+    // so its reconnect is scheduled whether or not the socket reports the close. Before, nothing was left scheduled and
+    // the client exited 0 after a disconnect.
     const timeout = setTimeout(() => {
-      ws.close();
+      try { ws.terminate(); } catch { try { ws.close(); } catch {} }
       if (onFirstError) {
         onFirstError(new Error('Tunnel connection timeout'));
         onFirstError = null;
       }
+      ended(1006, 'connection timeout');
     }, 10000);
 
     ws.on('open', () => {
@@ -323,7 +327,6 @@ export function createTunnel({
     });
 
     ws.on('error', (err: Error) => {
-      clearTimeout(timeout);
       log.warn(
         { component: 'tunnel_client', action: 'ws_error', port, error: err.message },
         `[ERROR] WebSocket error: ${err.message}`
@@ -332,10 +335,20 @@ export function createTunnel({
         onFirstError(err);
         onFirstError = null;
       }
+      // An error may come with no close after it: it ends this attempt too.
+      ended(1006, err.message);
     });
 
-    ws.on('close', (code: number, reason: Buffer) => {
-      lastClose = { code, reason: reason.toString().slice(0, 200) };
+    ws.on('close', (code: number, reason: Buffer) => ended(code, reason.toString()));
+
+    // This attempt's end, once: the socket's close, or its connection timeout.
+    let endedOnce = false;
+    function ended(code: number, reason: string): void {
+      if (endedOnce) return;
+      endedOnce = true;
+      // An attempt ended by its error or timeout leaves no socket behind the reconnect.
+      try { ws.terminate(); } catch {}
+      lastClose = { code, reason: reason.slice(0, 200) };
       clearTimeout(timeout);
       if (keepaliveInterval) {
         clearInterval(keepaliveInterval);
@@ -363,7 +376,7 @@ export function createTunnel({
       }
 
       scheduleReconnect(onRegistered, registered);
-    });
+    }
   }
 
   return new Promise((resolve, reject) => {
