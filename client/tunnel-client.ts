@@ -56,15 +56,19 @@ export function createTunnel({
   // Set to true on any successful registration. Once true, reconnect attempts that
   // fail (close without receiving 'registered') will still retry instead of giving up.
   let everRegistered = false;
+  // The control socket's last close, as the server or the network ended it: logged with each reconnect, so a disconnect
+  // says why (1006 is a connection lost without a close frame).
+  let lastClose: { code: number; reason: string } | undefined;
 
   function scheduleReconnect(onRegistered: (handle: TunnelHandle) => void, registered: boolean): void {
     if (closed) return;
     const delay = reconnectDelay;
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
     log.info(
-      { component: 'tunnel_client', action: 'reconnecting', port, delay, registered },
-      `Tunnel disconnected, reconnecting in ${delay}ms`
+      { component: 'tunnel_client', action: 'reconnecting', port, delay, registered, closeCode: lastClose?.code, closeReason: lastClose?.reason },
+      `${new Date().toISOString()} Tunnel disconnected (close ${lastClose?.code ?? 'unknown'}${lastClose?.reason ? `: ${lastClose.reason}` : ''}), reconnecting in ${delay}ms`
     );
+    lastClose = undefined;
     // Keep this timer referenced so a failed attempt cannot drain the event loop.
     setTimeout(() => {
       if (closed) return;
@@ -330,7 +334,8 @@ export function createTunnel({
       }
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code: number, reason: Buffer) => {
+      lastClose = { code, reason: reason.toString().slice(0, 200) };
       clearTimeout(timeout);
       if (keepaliveInterval) {
         clearInterval(keepaliveInterval);
