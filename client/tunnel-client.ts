@@ -327,7 +327,6 @@ export function createTunnel({
     });
 
     ws.on('error', (err: Error) => {
-      clearTimeout(timeout);
       log.warn(
         { component: 'tunnel_client', action: 'ws_error', port, error: err.message },
         `[ERROR] WebSocket error: ${err.message}`
@@ -336,6 +335,8 @@ export function createTunnel({
         onFirstError(err);
         onFirstError = null;
       }
+      // An error may come with no close after it: it ends this attempt too.
+      ended(1006, err.message);
     });
 
     ws.on('close', (code: number, reason: Buffer) => ended(code, reason.toString()));
@@ -345,6 +346,8 @@ export function createTunnel({
     function ended(code: number, reason: string): void {
       if (endedOnce) return;
       endedOnce = true;
+      // An attempt ended by its error or timeout leaves no socket behind the reconnect.
+      try { ws.terminate(); } catch {}
       lastClose = { code, reason: reason.slice(0, 200) };
       clearTimeout(timeout);
       if (keepaliveInterval) {
