@@ -68,6 +68,7 @@ export function createTunnel({
       { component: 'tunnel_client', action: 'reconnecting', port, delay, registered, closeCode: lastClose?.code, closeReason: lastClose?.reason },
       `${new Date().toISOString()} Tunnel disconnected (close ${lastClose?.code ?? 'unknown'}${lastClose?.reason ? `: ${lastClose.reason}` : ''}), reconnecting in ${delay}ms`
     );
+    lastClose = undefined;
     // Keep this timer referenced so a failed attempt cannot drain the event loop.
     setTimeout(() => {
       if (closed) return;
