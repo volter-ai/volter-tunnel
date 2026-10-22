@@ -22,7 +22,7 @@
   "publishConfig": { "access": "public" },
   "scripts": {
     "build": "tsup src/index.ts --format esm --clean --out-dir dist",
-    "prepublishOnly": "bun run build",
+    "prepublishOnly": "node ../../.github/require-publish-branch.mjs && bun run build",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   }
