@@ -89,6 +89,7 @@ export function createTunnel({
 
     const ws = new WebSocket(wsUrl, wsUrl.startsWith('wss:') ? { agent: http1Agent } : {});
     let registered = false;
+    let publicOrigin: string | undefined;
     // Hoisted so every teardown path (a reconnect via the 'close' handler, or an
     // explicit handle.close()) can clear it. It used to be declared inside the
     // 'registered' handler and cleared only on explicit close — so each reconnect
@@ -160,6 +161,7 @@ export function createTunnel({
       }
 
       if (msg.type === 'registered') {
+        publicOrigin = new URL(msg.url).origin;
         clearTimeout(timeout);
         registered = true;
         everRegistered = true;
@@ -292,7 +294,7 @@ export function createTunnel({
           `[WS-RELAY] Received ws-upgrade connId=${msg.connId}`
         );
         try {
-          handleWsUpgrade(port, localHost, ws, msg, localWsConnections, log);
+          handleWsUpgrade(port, localHost, ws, msg, localWsConnections, log, publicOrigin);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           log.warn(

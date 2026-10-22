@@ -102,6 +102,13 @@ server-cf/       Cloudflare Worker + Durable Objects relay (primary). One DO per
 The protocol lives in `core` and nowhere else, so the client and relay can't
 drift — a change to the contract is type-checked on both sides.
 
+Browser WebSocket upgrades keep their subprotocol and application credentials.
+An `Origin` matching the tunnel's registered public URL is translated to the
+local handshake's actual `Host`, including Bun's dialed IPv4 or IPv6 address.
+This lets a downstream development proxy translate it to its configured public
+origin. Foreign, opaque (`null`) and absent origins are preserved for the local
+application to authorize.
+
 ## Run a relay locally
 
 To try a tunnel end-to-end with no hosted account, run the relay locally and
