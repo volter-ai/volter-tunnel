@@ -236,3 +236,19 @@ in a header and logs status/method/correlation ray. No request URL, header,
 query, body or credential is recorded by these diagnostics. Ordinary upstream
 HTTP statuses are forwarded unchanged and remain in the relay's invocation
 telemetry; a missing control is distinguished from them.
+
+
+## D9 — Integration never publishes (VO-3560)
+
+Retires `.github/workflows/publish.yml` (automatic npm release from main),
+`pages.yml` (main-triggered documentation build/publication), `deploy.yml` (the
+long relay test/build/publication lane), and `account-limits.yml` (root rotation
+and minute-spanning retries). Retires their automatic-release instructions in
+CONTRIBUTING and PUBLISHING and the test requirement in the deploy runbook.
+
+Owner policy, 2026-10-14: “Main is an autonomous integration branch and is never
+published.” “Long build/publication workflows are retired, not shortened by
+dropping required work.” No retained Actions workflow performs these operations.
+Integration and publication are separate acts; the operator prepares the exact
+reviewed artifacts and obtains the appropriate authority before releasing from
+`publish`. The operator retains deployment/version readback on the work card.

@@ -52,10 +52,14 @@ All commands run from `server-cf/`.
 
 ## 3. Deploy
 
+For the Volter-managed public relay, obtain the owner’s word for the exact reviewed
+commit before deployment. Merging main or creating a tag never authorizes publication.
+
 ```bash
 cd server-cf
-npm run typecheck && npm test     # all suites should pass
-npm run deploy                    # wrangler deploy
+npm run typecheck
+npx wrangler deploy --dry-run    # prepare the exact source before release
+npm run deploy                    # only after explicit release authorization
 ```
 
 The privileged internal account self-provisions on first use.

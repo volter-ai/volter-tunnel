@@ -30,8 +30,8 @@ bun test ./test                   # client SDK + CLI
 cd server-cf && npm install && npm test          # relay (real workerd; writes the brand tokens first)
 ```
 
-Every push to `main` is released: the `publish` workflow moves each package that changed to its next patch
-version, publishes it to npm and commits the version back.
+`main` integrates reviewed work and never publishes. Release is a separate operation from an explicitly
+authorized `publish` ref. See [Publishing](dev-docs/PUBLISHING.md) for authority and preparation.
 
 ## Ground rules
 
