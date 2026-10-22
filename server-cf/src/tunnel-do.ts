@@ -669,11 +669,12 @@ export class TunnelDO extends DurableObject<Env> {
     const ctl = await this.readControl(request);
     const attach = ctl?.deserializeAttachment() as CtlAttach | undefined;
     if (!ctl || !attach?.registered) {
-      // The entry Worker is still piping a write's body into this DO. End that
-      // pipe before answering an unavailable tunnel; otherwise workerd can
-      // continue reading it after the outer response has already been sent.
-      // Cancel rather than buffer or replay a body we will never dispatch.
-      if (request.body && !request.bodyUsed) await request.body.cancel().catch(() => {});
+      // Finish the entry Worker's body pipe before responding. Cancelling this
+      // DO-side stream can leave the caller's pump reading after its response,
+      // so consume to EOF without retaining or forwarding any body bytes.
+      if (request.body && !request.bodyUsed) {
+        await request.body.pipeTo(new WritableStream<Uint8Array>()).catch(() => {});
+      }
       return this.unavailable(request, 'Tunnel not connected');
     }
 
