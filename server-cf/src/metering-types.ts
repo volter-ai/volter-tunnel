@@ -116,6 +116,9 @@ export interface AuthorizeResult {
   reason?: string;
   slug?: string;
   leaseChunk?: number;
+  /** Ledger preserved by authorize; a relay may carry local credits only when
+   * this nonce matches its previous registration. Missing/reaped means none. */
+  carriedLease?: { regId: string; credits: number };
   rate?: RateSnapshot;
   /** Present on reservationCap so clients can explain and recover without root. */
   reservedTunnels?: string[];

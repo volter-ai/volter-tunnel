@@ -208,8 +208,9 @@ or opening signup to the public (widen / clear `SIGNUP_ALLOWED_USERS`).
 Retires `TunnelDO.handleHttpRequest` immediately returning `Tunnel not connected`
 for every read during a just-observed control disconnect; selecting closed or
 superseded control sockets; and `webSocketClose` clearing shared traffic and
-credits after asynchronous settlement, when a successor may already own them.
-It also retires discarding the platform's control-close code, reason and socket
+credits after asynchronous settlement, when a successor may already own them;
+and registration-independent lease continuations/counters, which could restore
+an old grant after its account settlement had refunded it. It also retires discarding the platform's control-close code, reason and socket
 error in the hibernation handlers. This is an implementation decision, not an
 owner-locked ruling.
 
@@ -224,11 +225,24 @@ retains the ordinary unavailable response.
 
 Each resumed read goes through the current registration's Basic/JWT authority,
 reserved-id/device ownership and credit controls before one dispatch. A control
-changed during an authorization await fails closed. Closing a control detaches
-its traffic and snapshots its settlement synchronously, before any account or
-storage await; the delayed settlement is scoped to its old registration id and
-cannot tear down a successor. D2's protocol ping and idle hibernation, D5's
-reservation ownership, and the wire protocol are unchanged.
+changed during an authorization await fails closed. Closing a control retires
+its metering state and detaches its traffic synchronously, before any account
+or storage await. Lease RPCs, reauthorization, registration and final settlement
+share one ordered chain. Every queued charge captures its registration, checks
+ownership before spending and after awaiting, and mutates only that owner's
+counters. Commits and raw usage are detached before an RPC so concurrent frame
+charges remain for the next settlement. A retired lease reply remains with its
+old state until close returns its unused grant; it cannot restore a successor's
+budget. Delayed quota/batch continuations cannot disconnect successor traffic.
+
+An accepted same-account replacement atomically transfers uncommitted actuals
+and the local lease remainder after all earlier RPCs complete; AccountDO names
+the preserved ledger registration and amount, so a reaped/refunded lease is not
+carried. The old state is marked settled and its queued close does nothing.
+A replacement rejected by account/device authority leaves the current owner
+intact. Browser sockets carry their registration nonce and cannot send frames
+or close notifications through a successor. D2's protocol ping and idle
+hibernation, D5's reservation ownership, and the wire protocol are unchanged.
 
 The relay logs control close code/clean flag and sanitized reason/error at the
 boundary that observes them. An unavailable HTTP response names `relay-control`
