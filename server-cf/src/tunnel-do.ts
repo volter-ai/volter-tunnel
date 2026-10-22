@@ -394,9 +394,12 @@ export class TunnelDO extends DurableObject<Env> {
 
   /** Runs inside accountChain. Capture the commit BEFORE yielding: synchronous
    * frame charges during the RPC accrue to the next commit, never this one. */
-  private async spendBudget(state: MeteringState, cost: number): Promise<boolean> {
-    if (!this.ownsMetering(state)) return false;
-    if (state.budget < cost) {
+  private async spendBudget(state: MeteringState, cost: number, delivered = false): Promise<boolean> {
+    // Final settlement may pay already-delivered messages after retirement, on
+    // the same ordered ledger. This never authorizes traffic or reauthorization.
+    const canCharge = () => !state.settled && (delivered || this.ownsMetering(state));
+    if (!canCharge()) return false;
+    while (canCharge() && state.budget < cost) {
       const a = state.attach;
       const want = Math.max(a.leaseChunk ?? 50, cost);
       const commit = state.consumed;
@@ -417,9 +420,14 @@ export class TunnelDO extends DurableObject<Env> {
       this.applyRate(state, res?.rate);
       // Even a retired owner's reply belongs here. Its queued close will return
       // this unused grant, or an ordered authorized handoff will carry it once.
-      state.budget += res?.grant ?? 0;
+      const grant = res?.grant ?? 0;
+      state.budget += grant;
+      // AccountDO caps each grant to leaseChunk. A positive partial grant is
+      // progress, not exhaustion; small configured chunks may need more than
+      // one grant even for a bounded message batch. Stop on refusal/unavailability.
+      if (grant <= 0) return false;
     }
-    if (!this.ownsMetering(state) || state.budget < cost) return false;
+    if (!canCharge() || state.budget < cost) return false;
     state.budget -= cost;
     state.consumed += cost;
     return true;
@@ -447,16 +455,19 @@ export class TunnelDO extends DurableObject<Env> {
   }
 
   private flushMessages(state: MeteringState): Promise<void> {
-    if (state.flushQueued) return Promise.resolve();
+    if (state.flushQueued || !this.ownsMetering(state)) return Promise.resolve();
+    // Capture a payable batch BEFORE queueing. Keep its count in messages until
+    // paid: retirement/handoff can then carry all uncharged actuals exactly once,
+    // including a batch whose queued callback never starts on this registration.
+    const n = Math.min(state.messages, MSG_FLUSH_EVERY);
+    if (n <= 0) return Promise.resolve();
     state.flushQueued = true;
+    let paid = false;
     return this.orderedAccount(async () => {
-      if (!this.ownsMetering(state)) return; // final close owns its pending batch
-      const n = state.messages;
-      if (n <= 0) return;
-      state.messages = 0;
-      const ok = await this.spendBudget(state, n * CREDIT_WEIGHTS.message);
-      if (!ok) state.messages += n; // still owed; settle once on close/handoff
-      if (!ok && this.ownsMetering(state)) {
+      if (!this.ownsMetering(state)) return;
+      paid = await this.spendBudget(state, n * CREDIT_WEIGHTS.message);
+      if (paid) state.messages -= n;
+      if (!paid && this.ownsMetering(state)) {
         for (const b of this.ctx.getWebSockets('browser')) {
           try {
             (b as WebSocket).close(1011, 'Account quota exceeded');
@@ -465,15 +476,28 @@ export class TunnelDO extends DurableObject<Env> {
           }
         }
       }
-    }).finally(() => { state.flushQueued = false; });
+    }).finally(() => {
+      state.flushQueued = false;
+      // Further arrivals cannot enlarge n. Drain them in later bounded turns;
+      // never retry refused debt in a loop or schedule work for a retired owner.
+      if (paid && this.ownsMetering(state) && state.messages >= MSG_FLUSH_EVERY) {
+        void this.flushMessages(state).catch(() => {});
+      }
+    });
   }
 
   /** Called only in accountChain, after all older lease replies. A transferred
    * registration is already settled locally and its delayed close is inert. */
   private async settle(state: MeteringState, closedAt: number): Promise<void> {
     if (state.settled) return;
-    state.settled = true;
     state.active = false;
+    // Pending control messages were already relayed. Fund their actuals before
+    // /close refunds the ledger; its clamped commit cannot itself acquire the
+    // credits for a backlog larger than the remaining outstanding lease.
+    if (state.messages > 0 && await this.spendBudget(state, state.messages * CREDIT_WEIGHTS.message, true)) {
+      state.messages = 0;
+    }
+    state.settled = true;
     const a = state.attach;
     const consumed = state.consumed + state.messages * CREDIT_WEIGHTS.message;
     const raw = this.takeRaw(state);
@@ -1300,6 +1324,10 @@ export class TunnelDO extends DurableObject<Env> {
       next.quotaLevel = auth.rate?.level ?? null;
       this.metering = next;
       ws.serializeAttachment(nextAttach);
+      // A predecessor may have had a queued batch behind this authorization.
+      // Its inert callback cannot bill the successor; drain the transferred
+      // actuals through fresh batches owned by the new registration instead.
+      if (next.messages >= MSG_FLUSH_EVERY) void this.flushMessages(next).catch(() => {});
       if (previous && !previous.settled) {
         previous.active = false;
         await this.settle(previous, Date.now());

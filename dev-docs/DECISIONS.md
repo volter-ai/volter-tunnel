@@ -234,6 +234,16 @@ counters. Commits and raw usage are detached before an RPC so concurrent frame
 charges remain for the next settlement. A retired lease reply remains with its
 old state until close returns its unused grant; it cannot restore a successor's
 budget. Delayed quota/batch continuations cannot disconnect successor traffic.
+Each control-message flush captures at most 32 messages before queueing; pending
+arrivals cannot enlarge that charge. Its count stays in the owning state's
+unpaid actuals until payment, and successful flushes schedule later bounded
+batches. Handoff starts new batches for transferred unpaid actuals. A capped
+positive lease grant is progress, not quota exhaustion: the same owner may
+obtain further authorized grants until the charge is payable, but stops on a
+zero grant, unavailable account or retirement. Final settlement can acquire
+credits on that same ordered ledger to pay already-delivered message actuals
+before returning unused credits; it cannot relay traffic or reauthorize a retired
+registration. A genuinely exhausted account still stops further traffic.
 
 An accepted same-account replacement atomically transfers uncommitted actuals
 and the local lease remainder after all earlier RPCs complete; AccountDO names
