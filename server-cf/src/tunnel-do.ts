@@ -634,7 +634,14 @@ export class TunnelDO extends DurableObject<Env> {
     }
     const ctl = await this.readControl(request);
     const attach = ctl?.deserializeAttachment() as CtlAttach | undefined;
-    if (!ctl || !attach?.registered) return this.unavailable(request, 'Tunnel not connected');
+    if (!ctl || !attach?.registered) {
+      // The entry Worker is still piping a write's body into this DO. End that
+      // pipe before answering an unavailable tunnel; otherwise workerd can
+      // continue reading it after the outer response has already been sent.
+      // Cancel rather than buffer or replay a body we will never dispatch.
+      if (request.body && !request.bodyUsed) await request.body.cancel().catch(() => {});
+      return this.unavailable(request, 'Tunnel not connected');
+    }
 
     // Per-tunnel request-rate burst limit (#4) — cheap flood guard ahead of auth
     // and forwarding. The daily/monthly credit caps remain the primary limit.
