@@ -277,6 +277,7 @@ export function handleWsUpgrade(
       JSON.stringify({
         type: 'ws-ready',
         connId: msg.connId,
+        protocol: localWs.protocol,
       })
     );
   });

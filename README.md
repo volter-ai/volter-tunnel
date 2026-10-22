@@ -108,6 +108,9 @@ local handshake's actual `Host`, including Bun's dialed IPv4 or IPv6 address.
 This lets a downstream development proxy translate it to its configured public
 origin. Foreign, opaque (`null`) and absent origins are preserved for the local
 application to authorize.
+The relay returns the local server's selected WebSocket subprotocol to the
+browser, after checking that it was offered. It never chooses one on the
+application's behalf.
 
 ## Run a relay locally
 

@@ -59,6 +59,8 @@ export interface ResponseEndMsg {
 export interface WsReadyMsg {
   type: 'ws-ready';
   connId: CorrelationId;
+  /** The local server's selected subprotocol; absent for older clients. */
+  protocol?: string;
 }
 
 /** The client failed to establish/maintain the local WebSocket. */
