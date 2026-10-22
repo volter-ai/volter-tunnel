@@ -28,19 +28,25 @@ Node:
 
 `bun run build` emits `dist/` for all three (core → client → mcp); bins carry a
 `#!/usr/bin/env node` shebang and a portable entry guard (works on Bun and Node).
-CI builds and Node-smoke-tests the artifacts on every PR.
+Build the exact release source locally before publication.
 
 ## Releasing
 
-Tag a version and let `.github/workflows/release.yml` publish (needs an
-`NPM_TOKEN` secret). It builds, then publishes **core → client → mcp** in order
-with `bun publish`, which rewrites the `workspace:*` dependency to the real
-version.
+`main` is an autonomous integration branch and never publishes. The former main/tag
+publication, relay deployment, Pages build/deployment and account-limit rotation
+workflows are retired (DECISIONS D9). No merge or tag starts a release.
 
-```bash
-npm version <patch|minor|major> --workspaces false   # or bump manually
-git tag vX.Y.Z && git push --tags
-```
+Prepare the exact reviewed source, build the artifacts, and identify the target and
+commit before requesting release authority. Only advance `publish` after explicit
+owner authorization. A public relay or documentation release needs the owner's word;
+a limited release needs the manager's permission. An npm release needs the manager's
+permission after a key sweep over the exact packed tarball using gitleaks rules,
+custody values and `@volter/teams/redact`. Never print, copy or commit custody.
 
-Locally you can dry-run with `bun pm pack` / `npm pack --dry-run` in each package
-to inspect the tarball before tagging.
+After authorization, the operator reads the required credential in place, publishes
+the prepared artifacts (core → client → mcp for npm; `wrangler deploy` for the relay),
+records the resulting versions/deployment id, and reads back the released target.
+Preserve existing relay bindings, routes, secrets and account authority. Updating
+account limits is an explicit authenticated admin operation; never rotate the root
+credential merely to invoke that operation. No retrying workflow replaces an
+operator's diagnosis of a failed operation.

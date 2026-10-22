@@ -307,7 +307,10 @@ export class AccountDO extends DurableObject<MeteringEnv> {
       this.reserved.add(tunnelId);
       await this.persistReserved();
     }
-    return { ok: true, slug: this.config.slug, leaseChunk: this.config.leaseChunk, rate: this.snapshot() };
+    return {
+      ok: true, slug: this.config.slug, leaseChunk: this.config.leaseChunk, rate: this.snapshot(),
+      carriedLease: existing ? { regId: existing.regId, credits: existing.lease } : undefined,
+    };
   }
 
   /** True when `regId` is allowed to act on this entry (matches, or either side

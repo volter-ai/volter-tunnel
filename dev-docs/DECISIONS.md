@@ -200,3 +200,79 @@ or opening signup to the public (widen / clear `SIGNUP_ALLOWED_USERS`).
   resilience already handles ordinary flaps.
 - **Iframe/CSP-rewriting uniqueness** rests on absence-of-documentation across
   the OSS field, not exhaustive code audits — high confidence, not proof.
+
+---
+
+## D8. An undispatched read can wait for the connector's first reconnect
+
+Retires `TunnelDO.handleHttpRequest` immediately returning `Tunnel not connected`
+for every read during a just-observed control disconnect; selecting closed or
+superseded control sockets; and `webSocketClose` clearing shared traffic and
+credits after asynchronous settlement, when a successor may already own them;
+and registration-independent lease continuations/counters, which could restore
+an old grant after its account settlement had refunded it. It also retires discarding the platform's control-close code, reason and socket
+error in the hibernation handlers. This is an implementation decision, not an
+owner-locked ruling.
+
+A GET/HEAD that has not been sent may wait until three seconds after an
+unexpected close (1006, 1011, 1012 or 1013). A successful, authenticated
+registration wakes the held reads. The wait is event-driven, bounded to 64
+callers, cancelled with the caller, and survives hibernation by keeping only the
+last close's timestamp/code/clean flag in storage. It does not buffer request
+bodies or replay writes, sent requests, streams or browser socket frames. An
+intentional close, absent recent loss, exhausted window or full waiter set
+retains the ordinary unavailable response.
+
+Each resumed read goes through the current registration's Basic/JWT authority,
+reserved-id/device ownership and credit controls before one dispatch. A control
+changed during an authorization await fails closed. Closing a control retires
+its metering state and detaches its traffic synchronously, before any account
+or storage await. Lease RPCs, reauthorization, registration and final settlement
+share one ordered chain. Every queued charge captures its registration, checks
+ownership before spending and after awaiting, and mutates only that owner's
+counters. Commits and raw usage are detached before an RPC so concurrent frame
+charges remain for the next settlement. A retired lease reply remains with its
+old state until close returns its unused grant; it cannot restore a successor's
+budget. Delayed quota/batch continuations cannot disconnect successor traffic.
+Each control-message flush captures at most 32 messages before queueing; pending
+arrivals cannot enlarge that charge. Its count stays in the owning state's
+unpaid actuals until payment, and successful flushes schedule later bounded
+batches. Handoff starts new batches for transferred unpaid actuals. A capped
+positive lease grant is progress, not quota exhaustion: the same owner may
+obtain further authorized grants until the charge is payable, but stops on a
+zero grant, unavailable account or retirement. Final settlement can acquire
+credits on that same ordered ledger to pay already-delivered message actuals
+before returning unused credits; it cannot relay traffic or reauthorize a retired
+registration. A genuinely exhausted account still stops further traffic.
+
+An accepted same-account replacement atomically transfers uncommitted actuals
+and the local lease remainder after all earlier RPCs complete; AccountDO names
+the preserved ledger registration and amount, so a reaped/refunded lease is not
+carried. The old state is marked settled and its queued close does nothing.
+A replacement rejected by account/device authority leaves the current owner
+intact. Browser sockets carry their registration nonce and cannot send frames
+or close notifications through a successor. D2's protocol ping and idle
+hibernation, D5's reservation ownership, and the wire protocol are unchanged.
+
+The relay logs control close code/clean flag and sanitized reason/error at the
+boundary that observes them. An unavailable HTTP response names `relay-control`
+in a header and logs status/method/correlation ray. No request URL, header,
+query, body or credential is recorded by these diagnostics. Ordinary upstream
+HTTP statuses are forwarded unchanged and remain in the relay's invocation
+telemetry; a missing control is distinguished from them.
+
+
+## D9 — Integration never publishes (VO-3560)
+
+Retires `.github/workflows/publish.yml` (automatic npm release from main),
+`pages.yml` (main-triggered documentation build/publication), `deploy.yml` (the
+long relay test/build/publication lane), and `account-limits.yml` (root rotation
+and minute-spanning retries). Retires their automatic-release instructions in
+CONTRIBUTING and PUBLISHING and the test requirement in the deploy runbook.
+
+Owner policy, 2026-10-14: “Main is an autonomous integration branch and is never
+published.” “Long build/publication workflows are retired, not shortened by
+dropping required work.” No retained Actions workflow performs these operations.
+Integration and publication are separate acts; the operator prepares the exact
+reviewed artifacts and obtains the appropriate authority before releasing from
+`publish`. The operator retains deployment/version readback on the work card.

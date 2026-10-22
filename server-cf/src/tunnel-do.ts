@@ -63,9 +63,28 @@ interface CtlAttach {
   /** SHA-256 of "user:pass" when the tunnel is gated by HTTP Basic Auth (#6). */
   basicAuthHash?: string;
 }
+/** Counters and continuations belong to one control registration. Retiring a
+ * socket stops spending immediately; its queued settlement still owns its state. */
+interface MeteringState {
+  ws: WebSocket;
+  attach: CtlAttach;
+  active: boolean;
+  settled: boolean;
+  /** Unspent leased credits; consumed/raw are detached before each RPC. */
+  budget: number;
+  consumed: number;
+  raw: UsageDelta;
+  /** Delivered control messages not yet charged (bounded batching). */
+  messages: number;
+  flushQueued: boolean;
+  rate: RateSnapshot | null;
+  quotaLevel: string | null;
+}
+
 interface BrowserAttach {
   role: 'browser';
   connId: string;
+  regId?: string;
 }
 
 interface PendingHttp {
@@ -114,6 +133,16 @@ const MSG_FLUSH_EVERY = 32;
 
 /** Max requests retained in the live inspector ring (#5). */
 const INSPECT_CAP = 50;
+
+// A connector's first reconnect starts after 1s. Keep an undispatched read
+// through that handoff, without waiting indefinitely on an offline tunnel.
+const READ_RECONNECT_MS = 3000;
+const READ_RECONNECT_CAP = 64;
+interface ControlLoss {
+  at: number;
+  code: number;
+  wasClean: boolean;
+}
 
 function b64encode(bytes: Uint8Array): string {
   let s = '';
@@ -170,6 +199,7 @@ export class TunnelDO extends DurableObject<Env> {
   private pendingHttp = new Map<string, PendingHttp>();
   private streaming = new Map<string, Streaming>();
   private pendingUpgrades = new Map<string, PendingUpgrade>();
+  private reconnectWaiters = new Set<() => void>();
 
   /** Operator response-header rewrite rules (parsed once from env). */
   private _headerRules: HeaderRules | null = null;
@@ -245,21 +275,47 @@ export class TunnelDO extends DurableObject<Env> {
   }
 
   // ── metering state (ephemeral; safe to lose on hibernation) ────────────────
-  /** Credits leased from the account but not yet spent. */
-  private budget = 0;
-  /** Credits spent since the last lease/close flush to the account. */
-  private consumedSinceCommit = 0;
-  /** Raw usage (for dashboards) accumulated since the last flush. */
-  private rawSinceFlush: UsageDelta = { requests: 0, wsUpgrades: 0, bytes: 0, seconds: 0 };
-  /** Serializes budget mutations so concurrent requests don't double-lease. */
-  private budgetChain: Promise<unknown> = Promise.resolve();
-  /** Latest limit snapshot from the account (for RateLimit headers + quota push). */
-  private rate: RateSnapshot | null = null;
-  /** Last quota level pushed to the client — only re-push on change. */
-  private lastQuotaLevel: string | null = null;
-  /** Relayed DO messages (response chunks + WS frames) not yet charged. Flushed
-   *  in batches so the per-frame path stays cheap; bounds unmetered overshoot. */
-  private msgsSinceFlush = 0;
+  private metering: MeteringState | null = null;
+  /** Order leases, reauthorization, replacement and close together. A close may
+   * retire traffic during an RPC, but cannot refund that RPC's grant before its
+   * continuation has returned to the owning state. */
+  private accountChain: Promise<unknown> = Promise.resolve();
+
+  private orderedAccount<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.accountChain.then(work);
+    this.accountChain = run.catch(() => {});
+    return run;
+  }
+
+  private newMetering(ws: WebSocket, attach: CtlAttach): MeteringState {
+    return {
+      ws,
+      attach,
+      active: true,
+      settled: false,
+      budget: 0,
+      consumed: 0,
+      raw: {},
+      messages: 0,
+      flushQueued: false,
+      rate: null,
+      quotaLevel: null,
+    };
+  }
+
+  private meteringFor(ws: WebSocket): MeteringState {
+    if (this.metering?.ws === ws) return this.metering;
+    // Hibernation retains the attachment, but not unused local credits. Only
+    // the currently registered socket can reconstruct ephemeral metering state.
+    const attach = ws.deserializeAttachment() as CtlAttach;
+    const state = this.newMetering(ws, attach);
+    this.metering = state;
+    return state;
+  }
+
+  private ownsMetering(state: MeteringState): boolean {
+    return state.active && !state.settled && this.metering === state && this.ctl() === state.ws;
+  }
 
   private accountStub(slug?: string): DurableObjectStub | null {
     const s = slug ?? this.ctlAttach()?.slug;
@@ -296,148 +352,161 @@ export class TunnelDO extends DurableObject<Env> {
     }
   }
 
-  private takeRaw(): UsageDelta {
-    const r = this.rawSinceFlush;
-    this.rawSinceFlush = { requests: 0, wsUpgrades: 0, bytes: 0, seconds: 0 };
-    return r;
+  private takeRaw(state: MeteringState): UsageDelta {
+    const raw = state.raw;
+    state.raw = {};
+    return raw;
   }
 
-  /** Record the latest account snapshot and, on a level change, push a `quota`
-   *  frame to the client so the CLI/gateway can warn before the hard cutoff. */
-  private applyRate(rate: RateSnapshot | undefined): void {
+  private applyRate(state: MeteringState, rate: RateSnapshot | undefined): void {
     if (!rate) return;
-    this.rate = rate;
-    if (rate.level !== this.lastQuotaLevel) {
-      this.lastQuotaLevel = rate.level;
-      const ctl = this.ctl();
-      if (ctl) {
-        try {
-          sendFrame(ctl, { type: 'quota', level: rate.level, day: rate.day, month: rate.month });
-        } catch {
-          /* control gone */
-        }
+    state.rate = rate;
+    if (this.ownsMetering(state) && rate.level !== state.quotaLevel) {
+      state.quotaLevel = rate.level;
+      try {
+        sendFrame(state.ws, { type: 'quota', level: rate.level, day: rate.day, month: rate.month });
+      } catch {
+        /* control gone */
       }
     }
   }
 
-  /** IETF RateLimit-* headers (draft-ietf-httpapi-ratelimit-headers) for the
-   *  binding daily window. `reset` is seconds until refill. */
-  private rateHeaders(): Record<string, string> {
-    if (!this.rate) return {};
+  private rateHeaders(state: MeteringState): Record<string, string> {
+    if (!state.rate) return {};
     const nowSec = Math.floor(Date.now() / 1000);
     return {
-      'ratelimit-limit': String(this.rate.day.limit),
-      'ratelimit-remaining': String(Math.max(0, this.rate.day.remaining)),
-      'ratelimit-reset': String(Math.max(1, this.rate.day.reset - nowSec)),
+      'ratelimit-limit': String(state.rate.day.limit),
+      'ratelimit-remaining': String(Math.max(0, state.rate.day.remaining)),
+      'ratelimit-reset': String(Math.max(1, state.rate.day.reset - nowSec)),
     };
   }
 
-  /** Seconds until the binding window refills — for Retry-After on a 429. */
-  private retryAfterSeconds(): number {
-    if (!this.rate) return 60;
+  private retryAfterSeconds(state: MeteringState): number {
+    if (!state.rate) return 60;
     const nowSec = Math.floor(Date.now() / 1000);
-    const dayOut = this.rate.day.remaining <= 0;
-    const reset = dayOut ? this.rate.day.reset : this.rate.month.reset;
+    const reset = state.rate.day.remaining <= 0 ? state.rate.day.reset : state.rate.month.reset;
     return Math.max(1, reset - nowSec);
   }
 
-  /**
-   * Pre-authorize `cost` credits before relaying. Spends from the local lease;
-   * tops the lease up from the account when short. Returns false (→ 429) when the
-   * account has no budget left — the hard cutoff that bounds spend. Fail-closed:
-   * an unreachable account yields no grant, so traffic stops rather than runs free.
-   */
-  private ensureBudget(cost: number): Promise<boolean> {
-    const run = this.budgetChain.then(async () => {
-      if (this.budget >= cost) {
-        this.budget -= cost;
-        this.consumedSinceCommit += cost;
-        return true;
-      }
-      const attach = this.ctlAttach();
-      const tunnelId = attach?.tunnelId ?? '';
-      const want = Math.max(attach?.leaseChunk ?? 50, cost);
-      let res = await this.accountRpc<LeaseResult>('/lease', {
-        tunnelId,
-        regId: attach?.regId,
-        want,
-        commit: this.consumedSinceCommit,
-        raw: this.takeRaw(),
-      });
-      this.consumedSinceCommit = 0;
-      // The account reaped our (idle) entry → re-register it and retry once so a
-      // still-connected tunnel self-heals instead of getting wedged at 0 budget.
-      if (res?.notOpen && (await this.reauthorize())) {
-        res = await this.accountRpc<LeaseResult>('/lease', {
-          tunnelId,
-          regId: this.ctlAttach()?.regId,
-          want,
-          commit: 0,
-          raw: this.takeRaw(),
-        });
-      }
-      this.applyRate(res?.rate);
-      this.budget += res?.grant ?? 0;
-      if (this.budget >= cost) {
-        this.budget -= cost;
-        this.consumedSinceCommit += cost;
-        return true;
-      }
-      return false;
-    });
-    this.budgetChain = run.catch(() => {});
-    return run;
+  private ensureBudget(state: MeteringState, cost: number): Promise<boolean> {
+    return this.orderedAccount(() => this.spendBudget(state, cost));
   }
 
-  /** Re-authorize this tunnel's account entry after a reap. Runs inside the budget
-   *  chain (callers already hold it). True if the account re-accepted the tunnel. */
-  private async reauthorize(): Promise<boolean> {
-    const a = this.ctlAttach();
-    if (!a?.slug || !a.regId) return false;
+  /** Runs inside accountChain. Capture the commit BEFORE yielding: synchronous
+   * frame charges during the RPC accrue to the next commit, never this one. */
+  private async spendBudget(state: MeteringState, cost: number, delivered = false): Promise<boolean> {
+    // Final settlement may pay already-delivered messages after retirement, on
+    // the same ordered ledger. This never authorizes traffic or reauthorization.
+    const canCharge = () => !state.settled && (delivered || this.ownsMetering(state));
+    if (!canCharge()) return false;
+    while (canCharge() && state.budget < cost) {
+      const a = state.attach;
+      const want = Math.max(a.leaseChunk ?? 50, cost);
+      const commit = state.consumed;
+      state.consumed = 0;
+      let res = await this.accountRpc<LeaseResult>('/lease', {
+        tunnelId: a.tunnelId, regId: a.regId, want, commit, raw: this.takeRaw(state),
+      }, a.slug);
+      // A reaped lease has been refunded, so none of its local remainder may
+      // survive reauthorization. Never reauthorize a retired registration.
+      if (res?.notOpen) {
+        state.budget = 0;
+        if (this.ownsMetering(state) && await this.reauthorize(state) && this.ownsMetering(state)) {
+          res = await this.accountRpc<LeaseResult>('/lease', {
+            tunnelId: a.tunnelId, regId: a.regId, want, commit: 0, raw: this.takeRaw(state),
+          }, a.slug);
+        }
+      }
+      this.applyRate(state, res?.rate);
+      // Even a retired owner's reply belongs here. Its queued close will return
+      // this unused grant, or an ordered authorized handoff will carry it once.
+      const grant = res?.grant ?? 0;
+      state.budget += grant;
+      // AccountDO caps each grant to leaseChunk. A positive partial grant is
+      // progress, not exhaustion; small configured chunks may need more than
+      // one grant even for a bounded message batch. Stop on refusal/unavailability.
+      if (grant <= 0) return false;
+    }
+    if (!canCharge() || state.budget < cost) return false;
+    state.budget -= cost;
+    state.consumed += cost;
+    return true;
+  }
+
+  private async reauthorize(state: MeteringState): Promise<boolean> {
+    const a = state.attach;
+    if (!this.ownsMetering(state) || !a.slug || !a.regId) return false;
     const auth = await this.accountRpc<AuthorizeResult>('/authorize', {
-      slug: a.slug,
-      legacy: a.legacy,
-      tokenHash: a.tokenHash,
-      tunnelId: a.tunnelId,
-      regId: a.regId,
-    });
+      slug: a.slug, legacy: a.legacy, tokenHash: a.tokenHash,
+      tunnelId: a.tunnelId, regId: a.regId,
+    }, a.slug);
     return !!auth?.ok;
   }
 
-  /** Charge one relayed-message op. Fast path: spend from the locally-held lease
-   *  synchronously (no await, atomic in the single-threaded DO). Slow path (local
-   *  budget exhausted): await a top-up from the account. Returns false when the
-   *  account is out of budget — the caller must then cut the traffic off. This is
-   *  the synchronous gate the floodable browser-frame path needs so it can never
-   *  relay unmetered while an async charge is in flight. */
-  private async chargeMessage(): Promise<boolean> {
+  private async chargeMessage(state: MeteringState): Promise<boolean> {
+    if (!this.ownsMetering(state)) return false;
     const cost = CREDIT_WEIGHTS.message;
-    if (this.budget >= cost) {
-      this.budget -= cost;
-      this.consumedSinceCommit += cost;
+    if (state.budget >= cost) {
+      state.budget -= cost;
+      state.consumed += cost;
       return true;
     }
-    return this.ensureBudget(cost);
+    return this.ensureBudget(state, cost);
   }
 
-  /** Charge the batch of relayed CONTROL messages accrued since the last flush. On
-   *  exhaustion, cut the chatty traffic off by closing the browser sockets
-   *  (the control socket stays so the client can re-auth after the reset). */
-  private async flushMessages(): Promise<void> {
-    const n = this.msgsSinceFlush;
-    if (n <= 0) return;
-    this.msgsSinceFlush = 0;
-    const ok = await this.ensureBudget(n * CREDIT_WEIGHTS.message);
-    if (!ok) {
-      this.applyRate(this.rate ?? undefined); // ensure an 'exceeded' quota push
-      for (const b of this.ctx.getWebSockets('browser')) {
-        try {
-          (b as WebSocket).close(1011, 'Account quota exceeded');
-        } catch {
-          /* already gone */
+  private flushMessages(state: MeteringState): Promise<void> {
+    if (state.flushQueued || !this.ownsMetering(state)) return Promise.resolve();
+    // Capture a payable batch BEFORE queueing. Keep its count in messages until
+    // paid: retirement/handoff can then carry all uncharged actuals exactly once,
+    // including a batch whose queued callback never starts on this registration.
+    const n = Math.min(state.messages, MSG_FLUSH_EVERY);
+    if (n <= 0) return Promise.resolve();
+    state.flushQueued = true;
+    let paid = false;
+    return this.orderedAccount(async () => {
+      if (!this.ownsMetering(state)) return;
+      paid = await this.spendBudget(state, n * CREDIT_WEIGHTS.message);
+      if (paid) state.messages -= n;
+      if (!paid && this.ownsMetering(state)) {
+        for (const b of this.ctx.getWebSockets('browser')) {
+          try {
+            (b as WebSocket).close(1011, 'Account quota exceeded');
+          } catch {
+            /* already gone */
+          }
         }
       }
+    }).finally(() => {
+      state.flushQueued = false;
+      // Further arrivals cannot enlarge n. Drain them in later bounded turns;
+      // never retry refused debt in a loop or schedule work for a retired owner.
+      if (paid && this.ownsMetering(state) && state.messages >= MSG_FLUSH_EVERY) {
+        void this.flushMessages(state).catch(() => {});
+      }
+    });
+  }
+
+  /** Called only in accountChain, after all older lease replies. A transferred
+   * registration is already settled locally and its delayed close is inert. */
+  private async settle(state: MeteringState, closedAt: number): Promise<void> {
+    if (state.settled) return;
+    state.active = false;
+    // Pending control messages were already relayed. Fund their actuals before
+    // /close refunds the ledger; its clamped commit cannot itself acquire the
+    // credits for a backlog larger than the remaining outstanding lease.
+    if (state.messages > 0 && await this.spendBudget(state, state.messages * CREDIT_WEIGHTS.message, true)) {
+      state.messages = 0;
     }
+    state.settled = true;
+    const a = state.attach;
+    const consumed = state.consumed + state.messages * CREDIT_WEIGHTS.message;
+    const raw = this.takeRaw(state);
+    state.consumed = state.messages = state.budget = 0;
+    if (!a.slug) return;
+    await this.accountRpc('/close', {
+      slug: a.slug, tunnelId: a.tunnelId, regId: a.regId, consumed, raw,
+      seconds: a.openedAt ? Math.max(0, (closedAt - a.openedAt) / 1000) : 0,
+    }, a.slug);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -492,12 +561,85 @@ export class TunnelDO extends DurableObject<Env> {
   // ── control socket helpers ────────────────────────────────────────────────
   private ctl(): WebSocket | null {
     const arr = this.ctx.getWebSockets('ctl');
-    const registered = arr.find((ws) => (ws.deserializeAttachment() as CtlAttach | null)?.registered);
-    return (registered ?? arr[0] ?? null) as WebSocket | null;
+    return (arr.find((ws) => {
+      const attach = ws.deserializeAttachment() as CtlAttach | null;
+      return ws.readyState === WebSocket.OPEN && attach?.registered && !attach.superseded;
+    }) ?? null) as WebSocket | null;
   }
   private ctlAttach(): CtlAttach | null {
     const ws = this.ctl();
     return ws ? (ws.deserializeAttachment() as CtlAttach) : null;
+  }
+
+  /** This request has never been sent. Wake on an authorized registration,
+   * then let the ordinary auth and metering preamble decide whether to relay it.
+   * No write or in-flight request is retried. Persist the loss (not requests) so
+   * hibernation between close and the next read preserves the bounded window. */
+  private async readControl(request: Request): Promise<WebSocket | null> {
+    const active = this.ctl();
+    if (active || (request.method !== 'GET' && request.method !== 'HEAD') || request.signal.aborted) return active;
+    const loss = await this.ctx.storage.get<ControlLoss>('controlLoss');
+    const remaining = loss ? READ_RECONNECT_MS - (Date.now() - loss.at) : 0;
+    if (!loss || ![1006, 1011, 1012, 1013].includes(loss.code) || remaining <= 0) return this.ctl();
+    if (this.reconnectWaiters.size >= READ_RECONNECT_CAP) return this.ctl();
+    const started = Date.now();
+    const control = await new Promise<WebSocket | null>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.reconnectWaiters.delete(done);
+        request.signal.removeEventListener('abort', done);
+        resolve(request.signal.aborted ? null : this.ctl());
+      };
+      const timer = setTimeout(done, remaining);
+      this.reconnectWaiters.add(done);
+      request.signal.addEventListener('abort', done, { once: true });
+      // Registration or cancellation may have completed during the storage read.
+      if (this.ctl() || request.signal.aborted) done();
+    });
+    console.log(
+      JSON.stringify({
+        event: 'tunnel.read-reconnect',
+        at: new Date().toISOString(),
+        ray: request.headers.get('cf-ray'),
+        method: request.method,
+        code: loss.code,
+        waitedMs: Date.now() - started,
+        connected: !!control,
+        aborted: request.signal.aborted,
+      })
+    );
+    return control;
+  }
+
+  private unavailable(request: Request, message: string, cause?: unknown): Response {
+    console.error(
+      JSON.stringify({
+        event: 'tunnel.http-failure',
+        at: new Date().toISOString(),
+        boundary: 'relay-control',
+        ray: request.headers.get('cf-ray'),
+        method: request.method,
+        status: 502,
+        error: message,
+        ...(cause === undefined ? {} : { cause: this.socketDiagnostic(cause) }),
+      })
+    );
+    return new Response(message, {
+      status: 502,
+      headers: { ...corsHeaders(request), 'cache-control': 'no-store', 'x-volter-failure-boundary': 'relay-control' },
+    });
+  }
+
+  private socketDiagnostic(value: unknown): string {
+    let message = value instanceof Error ? `${value.name}: ${value.message}` : String(value ?? '');
+    for (const secret of [this.env.TUNNEL_SECRET, this.env.JWT_SECRET, this.env.ROOT_TOKEN]) {
+      if (secret) message = message.split(secret).join('[credential]');
+    }
+    return message
+      .replace(/\bvt[ars]_[\w-]+/gi, '[credential]')
+      .replace(/Bearer\s+\S+/gi, 'Bearer [credential]')
+      .replace(/https?:\/\/\S+/gi, '[url]')
+      .slice(0, 512);
   }
 
   private acceptControl(url: URL): Response {
@@ -548,10 +690,16 @@ export class TunnelDO extends DurableObject<Env> {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
-    const ctl = this.ctl();
-    const attach = this.ctlAttach();
+    const ctl = await this.readControl(request);
+    const attach = ctl?.deserializeAttachment() as CtlAttach | undefined;
     if (!ctl || !attach?.registered) {
-      return new Response('Tunnel not connected', { status: 502, headers: corsHeaders(request) });
+      // Finish the entry Worker's body pipe before responding. Cancelling this
+      // DO-side stream can leave the caller's pump reading after its response,
+      // so consume to EOF without retaining or forwarding any body bytes.
+      if (request.body && !request.bodyUsed) {
+        await request.body.pipeTo(new WritableStream<Uint8Array>()).catch(() => {});
+      }
+      return this.unavailable(request, 'Tunnel not connected');
     }
 
     // Per-tunnel request-rate burst limit (#4) — cheap flood guard ahead of auth
@@ -646,31 +794,39 @@ export class TunnelDO extends DurableObject<Env> {
       });
     }
 
-    // Meter + hard-cutoff: a request only relays if the account has budget.
-    this.rawSinceFlush.requests = (this.rawSinceFlush.requests ?? 0) + 1;
-    this.rawSinceFlush.bytes = (this.rawSinceFlush.bytes ?? 0) + (bodyBytes?.length ?? 0);
-    if (!(await this.ensureBudget(CREDIT_WEIGHTS.request))) {
-      const retry = this.retryAfterSeconds();
-      const scope = this.rate && this.rate.day.remaining <= 0 ? 'day' : 'month';
+    // Capture the owner before metering; authorization/body reads may yield.
+    if (request.signal.aborted || this.ctl() !== ctl) return this.unavailable(request, 'Tunnel connection changed');
+    const state = this.meteringFor(ctl);
+    state.raw.requests = (state.raw.requests ?? 0) + 1;
+    state.raw.bytes = (state.raw.bytes ?? 0) + (bodyBytes?.length ?? 0);
+    if (!(await this.ensureBudget(state, CREDIT_WEIGHTS.request))) {
+      if (!this.ownsMetering(state)) return this.unavailable(request, 'Tunnel connection changed');
+      const retry = this.retryAfterSeconds(state);
+      const scope = state.rate && state.rate.day.remaining <= 0 ? 'day' : 'month';
       return Response.json(
         { error: 'quota_exceeded', scope, retryAfter: retry },
         {
           status: 429,
           headers: {
             ...corsHeaders(request),
-            ...this.rateHeaders(),
+            ...this.rateHeaders(state),
             'retry-after': String(retry),
           },
         }
       );
     }
-    const rateHeaders = this.rateHeaders();
+    const rateHeaders = this.rateHeaders(state);
+
+    // Auth and account RPCs yield. Never send using a registration replaced
+    // during those awaits, or forward a read whose caller has already left.
+    if (request.signal.aborted || this.ctl() !== ctl) return this.unavailable(request, 'Tunnel connection changed');
 
     const reqId = crypto.randomUUID();
     this.pushInspect(reqId, request.method, url.pathname);
     if (!isReplay && this.replayEnabled) {
       await this.captureForReplay(reqId, request.method, forwardPath, forwardHeaders, bodyBytes);
     }
+    if (!this.ownsMetering(state)) return this.unavailable(request, 'Tunnel connection changed');
     return await new Promise<Response>((resolve) => {
       const timer = setTimeout(() => {
         this.pendingHttp.delete(reqId);
@@ -688,10 +844,11 @@ export class TunnelDO extends DurableObject<Env> {
           headers: forwardHeaders,
           body: bodyBytes?.length ? b64encode(bodyBytes) : null,
         });
-      } catch {
+      } catch (error) {
         clearTimeout(timer);
         this.pendingHttp.delete(reqId);
-        resolve(new Response('Tunnel send failed', { status: 502, headers: corsHeaders(request) }));
+        this.finishInspect(reqId, 502, null);
+        resolve(this.unavailable(request, 'Tunnel send failed', error));
       }
     });
   }
@@ -712,18 +869,22 @@ export class TunnelDO extends DurableObject<Env> {
       }
     }
 
-    // Meter + hard-cutoff (one charge per upgrade; relayed frames are not priced).
-    this.rawSinceFlush.wsUpgrades = (this.rawSinceFlush.wsUpgrades ?? 0) + 1;
-    if (!(await this.ensureBudget(CREDIT_WEIGHTS.wsUpgrade))) {
+    // Meter + hard-cutoff (upgrades and subsequent frames are charged separately).
+    if (this.ctl() !== ctl) return this.unavailable(request, 'Tunnel connection changed');
+    const state = this.meteringFor(ctl);
+    state.raw.wsUpgrades = (state.raw.wsUpgrades ?? 0) + 1;
+    if (!(await this.ensureBudget(state, CREDIT_WEIGHTS.wsUpgrade))) {
+      if (!this.ownsMetering(state)) return this.unavailable(request, 'Tunnel connection changed');
       return new Response('Account quota exceeded', {
         status: 429,
-        headers: { ...this.rateHeaders(), 'retry-after': String(this.retryAfterSeconds()) },
+        headers: { ...this.rateHeaders(state), 'retry-after': String(this.retryAfterSeconds(state)) },
       });
     }
 
+    if (!this.ownsMetering(state)) return this.unavailable(request, 'Tunnel connection changed');
     const connId = crypto.randomUUID();
     const { 0: client, 1: server } = new WebSocketPair();
-    server.serializeAttachment({ role: 'browser', connId } satisfies BrowserAttach);
+    server.serializeAttachment({ role: 'browser', connId, regId: attach.regId } satisfies BrowserAttach);
     this.ctx.acceptWebSocket(server, ['browser', `c:${connId}`]);
 
     const cleanPath = stripTokenParam(url.pathname + url.search);
@@ -750,7 +911,12 @@ export class TunnelDO extends DurableObject<Env> {
       }
       return new Response('tunnel timeout', { status: 504 });
     }
-    const offered = request.headers.get('sec-websocket-protocol')?.split(',').map((value) => value.trim()) ?? [];
+    if (!this.ownsMetering(state)) return this.unavailable(request, 'Tunnel connection changed');
+    const offered =
+      request.headers
+        .get('sec-websocket-protocol')
+        ?.split(',')
+        .map((value) => value.trim()) ?? [];
     // Echo the local server's selection, never guess from the browser's offers.
     // Older clients and upstreams selecting no protocol keep a headerless 101.
     if (protocol !== undefined && protocol !== '' && (typeof protocol !== 'string' || !offered.includes(protocol))) {
@@ -775,7 +941,9 @@ export class TunnelDO extends DurableObject<Env> {
     if (attach?.role === 'browser') {
       const ctl = this.ctl();
       if (!ctl) return;
-      if (!(await this.chargeMessage())) {
+      const state = this.meteringFor(ctl);
+      if (!attach.regId || attach.regId !== state.attach.regId) return;
+      if (!(await this.chargeMessage(state))) {
         try {
           ws.close(1011, 'Account quota exceeded');
         } catch {
@@ -783,6 +951,7 @@ export class TunnelDO extends DurableObject<Env> {
         }
         return;
       }
+      if (!this.ownsMetering(state)) return;
       const binary = typeof data !== 'string';
       const bytes = binary ? new Uint8Array(data as ArrayBuffer) : new TextEncoder().encode(data as string);
       // A DO WS frame is capped at 1 MiB and base64 inflates ~33%; an oversized
@@ -821,16 +990,20 @@ export class TunnelDO extends DurableObject<Env> {
     // Control-channel message (responses, chunks, ws relays from the tunnel
     // client) → count for batch metering (fire-and-forget, so the lease round-trip
     // never convoys response delivery under concurrency), then dispatch.
-    this.msgsSinceFlush++;
-    if (this.msgsSinceFlush >= MSG_FLUSH_EVERY) void this.flushMessages().catch(() => {});
+    if (msg.type !== 'register') {
+      if (this.ctl() !== ws) return;
+      const state = this.meteringFor(ws);
+      state.messages++;
+      if (state.messages >= MSG_FLUSH_EVERY) void this.flushMessages(state).catch(() => {});
+    }
     await this.onControlMessage(ws, msg);
   }
 
-  async webSocketClose(ws: WebSocket): Promise<void> {
+  async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
     const attach = ws.deserializeAttachment() as CtlAttach | BrowserAttach | null;
     if (attach?.role === 'browser') {
       const ctl = this.ctl();
-      if (ctl) {
+      if (ctl && attach.regId && attach.regId === this.ctlAttach()?.regId) {
         try {
           sendFrame(ctl, { type: 'ws-close', connId: attach.connId });
         } catch {
@@ -843,43 +1016,43 @@ export class TunnelDO extends DurableObject<Env> {
     // state to the successor. The superseded socket's delayed close is therefore
     // deliberately inert: settling or disconnecting here would clobber traffic
     // already owned by the new registration.
-    if (attach?.role === 'ctl' && (!attach.registered || attach.superseded)) return;
+    if (attach?.role !== 'ctl' || !attach.registered || attach.superseded) return;
 
-    // Settle metering: commit unflushed usage + tunnel-seconds and return any
-    // unconsumed lease to the account (recovers budget stranded by hibernation).
-    if (attach?.slug) {
-      // Fold any unflushed relayed-message ops into the final settlement.
-      this.consumedSinceCommit += this.msgsSinceFlush * CREDIT_WEIGHTS.message;
-      this.msgsSinceFlush = 0;
-      const seconds = attach.openedAt ? Math.max(0, (Date.now() - attach.openedAt) / 1000) : 0;
-      await this.accountRpc(
-        '/close',
-        {
-          slug: attach.slug,
-          tunnelId: attach.tunnelId,
-          regId: attach.regId,
-          consumed: this.consumedSinceCommit,
-          seconds,
-          raw: this.takeRaw(),
-        },
-        attach.slug
-      );
-      this.consumedSinceCommit = 0;
-      this.budget = 0;
+    const loss: ControlLoss = { at: Date.now(), code, wasClean };
+    console.error(
+      JSON.stringify({
+        event: 'tunnel.control-close',
+        at: new Date(loss.at).toISOString(),
+        tunnelId: attach.tunnelId,
+        code,
+        reason: this.socketDiagnostic(reason),
+        wasClean,
+        pendingHttp: this.pendingHttp.size,
+        streaming: this.streaming.size,
+      })
+    );
+    const state = this.meteringFor(ws);
+    state.active = false;
+    ws.serializeAttachment({ ...attach, registered: false } satisfies CtlAttach);
+    // Retire traffic synchronously. Settlement waits behind this owner's lease
+    // replies and never resets counters or traffic belonging to its successor.
+    this.disconnectTraffic('Tunnel disconnected');
+    const settlement = this.orderedAccount(() => this.settle(state, loss.at));
+    await this.ctx.storage.put('controlLoss', loss);
+    await settlement;
 
+    if (attach.slug) {
       // Idle clock starts now: stamp lastSeenAt at disconnect so the reclaim TTL
       // counts from when the owner went away, not from when it first connected
       // (DECISIONS D5). Only the current owner may move its own clock.
       const res = await this.ctx.storage.get<Reservation>('reservation');
-      if (res && res.ownerSlug === attach.slug) {
+      if (res && res.ownerSlug === attach.slug && res.lastSeenAt <= loss.at) {
         await this.ctx.storage.put('reservation', {
           ...res,
-          lastSeenAt: Date.now(),
+          lastSeenAt: loss.at,
         } satisfies Reservation);
       }
     }
-
-    this.disconnectTraffic('Tunnel disconnected');
   }
 
   /** Tear down traffic bound to the current connector. Replacement cannot keep
@@ -941,15 +1114,29 @@ export class TunnelDO extends DurableObject<Env> {
     }, 120000);
   }
 
-  async webSocketError(ws: WebSocket): Promise<void> {
-    await this.webSocketClose(ws);
+  async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
+    // Keep the platform error at its owning boundary, without credential or URL
+    // payloads supplied by a peer. No request headers, queries or bodies enter it.
+    const attach = ws.deserializeAttachment() as CtlAttach | BrowserAttach | null;
+    console.error(
+      JSON.stringify({
+        event: 'tunnel.socket-error',
+        at: new Date().toISOString(),
+        role: attach?.role,
+        error: this.socketDiagnostic(error),
+        code: 1006,
+      })
+    );
+    await this.webSocketClose(ws, 1006, '', false);
   }
 
   // ── control protocol ──────────────────────────────────────────────────────
   private async onControlMessage(ws: WebSocket, msg: Record<string, unknown>): Promise<void> {
     const type = msg.type as string;
 
-    if (type === 'register') {
+    if (type === 'register') return this.orderedAccount(async () => {
+      const current = ws.deserializeAttachment() as CtlAttach | null;
+      if (ws.readyState !== WebSocket.OPEN || current?.registered || current?.superseded) return;
       // Resolve the metering account from the presented secret. An api token
       // (`vta_<slug>_…`) names + proves its account; the legacy shared
       // TUNNEL_SECRET maps to the built-in internal account for back-compat.
@@ -1088,6 +1275,7 @@ export class TunnelDO extends DurableObject<Env> {
         return;
       }
 
+      const previous = this.metering;
       // The account now recognizes regId as the owner. Transfer the live relay
       // state before the next await: mark predecessors inert first, fail their
       // in-flight traffic, then publish the successor as registered. Visitors
@@ -1101,7 +1289,7 @@ export class TunnelDO extends DurableObject<Env> {
         this.disconnectTraffic('Tunnel replaced');
         for (const old of others) (old as WebSocket).close(4001, 'Replaced by new client');
       }
-      ws.serializeAttachment({
+      const nextAttach: CtlAttach = {
         role: 'ctl',
         registered: true,
         authRequired,
@@ -1114,7 +1302,42 @@ export class TunnelDO extends DurableObject<Env> {
         tokenHash,
         ...(credential?.ok === true ? { credentialCreatedAt: credential.createdAt, credentialId: credential.id } : {}),
         basicAuthHash,
-      } satisfies CtlAttach);
+      };
+      const next = this.newMetering(ws, nextAttach);
+      if (previous && !previous.settled && previous.attach.slug === slug) {
+        // All previous lease/reauthorize continuations ran before this authorize.
+        // AccountDO transfers the outstanding ledger; carry its local balance and
+        // uncommitted actuals once, even if close retired it during authorize.
+        next.budget = auth.carriedLease && auth.carriedLease.regId === previous.attach.regId
+          ? Math.min(previous.budget, Math.max(0, auth.carriedLease.credits - previous.consumed))
+          : 0;
+        next.consumed = previous.consumed;
+        next.raw = previous.raw;
+        next.messages = previous.messages;
+        nextAttach.openedAt = previous.attach.openedAt ?? openedAt;
+        previous.active = false;
+        previous.settled = true;
+        previous.budget = previous.consumed = previous.messages = 0;
+        previous.raw = {};
+      }
+      next.rate = auth.rate ?? null;
+      next.quotaLevel = auth.rate?.level ?? null;
+      this.metering = next;
+      ws.serializeAttachment(nextAttach);
+      // A predecessor may have had a queued batch behind this authorization.
+      // Its inert callback cannot bill the successor; drain the transferred
+      // actuals through fresh batches owned by the new registration instead.
+      if (next.messages >= MSG_FLUSH_EVERY) void this.flushMessages(next).catch(() => {});
+      if (previous && !previous.settled) {
+        previous.active = false;
+        await this.settle(previous, Date.now());
+      }
+      if (ws.readyState !== WebSocket.OPEN) {
+        next.active = false;
+        ws.serializeAttachment({ ...nextAttach, registered: false } satisfies CtlAttach);
+        await this.settle(next, Date.now());
+        return;
+      }
 
       // Account is authorized → claim/refresh/reclaim this tunnelId for it and
       // (re)start the idle clock. Same write for all three verdicts (the only
@@ -1133,8 +1356,7 @@ export class TunnelDO extends DurableObject<Env> {
 
       // Seed the rate snapshot + quota level so headers work from the first
       // request and we don't re-announce the level the client already sees.
-      this.rate = auth.rate ?? null;
-      this.lastQuotaLevel = auth.rate?.level ?? null;
+      if (!this.ownsMetering(next)) return;
       const url = `https://${tunnelId}.${this.env.TUNNEL_DOMAIN}`;
       sendFrame(ws, {
         type: 'registered',
@@ -1142,8 +1364,8 @@ export class TunnelDO extends DurableObject<Env> {
         url,
         account: auth.rate ? { slug, day: auth.rate.day, month: auth.rate.month, level: auth.rate.level } : undefined,
       });
-      return;
-    }
+      for (const wake of this.reconnectWaiters) wake();
+    });
 
     if (type === 'response') {
       const pending = this.pendingHttp.get(msg.reqId as string);
@@ -1171,7 +1393,13 @@ export class TunnelDO extends DurableObject<Env> {
       // Workers strip content-encoding from a constructed Response and assume the
       // body is decoded; a compressed upstream body then ships headerless and the
       // consumer reads gzip bytes as text. encodeBody manual passes both through.
-      pending.resolve(new Response(body, { status: (msg.status as number) || 200, headers, ...(headers.has('content-encoding') ? { encodeBody: 'manual' as const } : {}) } as ResponseInit));
+      pending.resolve(
+        new Response(body, {
+          status: (msg.status as number) || 200,
+          headers,
+          ...(headers.has('content-encoding') ? { encodeBody: 'manual' as const } : {}),
+        } as ResponseInit)
+      );
       return;
     }
 
@@ -1218,7 +1446,13 @@ export class TunnelDO extends DurableObject<Env> {
           }
         },
       });
-      pending.resolve(new Response(readable, { status, headers, ...(headers.has('content-encoding') ? { encodeBody: 'manual' as const } : {}) } as ResponseInit));
+      pending.resolve(
+        new Response(readable, {
+          status,
+          headers,
+          ...(headers.has('content-encoding') ? { encodeBody: 'manual' as const } : {}),
+        } as ResponseInit)
+      );
       return;
     }
 

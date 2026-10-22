@@ -112,6 +112,15 @@ The relay returns the local server's selected WebSocket subprotocol to the
 browser, after checking that it was offered. It never chooses one on the
 application's behalf.
 
+A GET or HEAD arriving just after an unexpected control disconnect waits for
+authenticated re-registration for the remainder of a three-second window.
+The relay holds at most 64 such reads, removes cancelled callers, and applies
+the successor's authorization and metering before forwarding each read once.
+Writes and requests already sent upstream are never retried. Offline tunnels
+still fail promptly after the window. Relay failures include
+`x-volter-failure-boundary: relay-control`; structured edge logs retain the
+status, correlation ray and sanitized control-close/error details.
+
 ## Run a relay locally
 
 To try a tunnel end-to-end with no hosted account, run the relay locally and
@@ -123,8 +132,8 @@ cd server-cf && npm install && npm run dev   # wrangler dev --local (real worker
 volter-tunnel --port 3000 --host http://127.0.0.1:8787 --auth-not-required
 ```
 
-> Packages build to Node-consumable JS via `bun run build` and publish on a
-> version tag. See [dev-docs/PUBLISHING.md](./dev-docs/PUBLISHING.md).
+> Packages build to Node-consumable JS via `bun run build` and publish only through an
+> explicitly authorized release. See [dev-docs/PUBLISHING.md](./dev-docs/PUBLISHING.md).
 
 ## Develop
 
