@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const deadline = performance.now() + 8000;
 const stop = (message) => {
   console.error(`publish: ${message}`);
   process.exit(1);
@@ -14,7 +15,7 @@ const git = (what, ...args) => {
       cwd: root,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 8000,
+      timeout: Math.max(1, Math.ceil(deadline - performance.now())),
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' },
     }).trim();
   } catch {

@@ -276,3 +276,28 @@ dropping required work.” No retained Actions workflow performs these operation
 Integration and publication are separate acts; the operator prepares the exact
 reviewed artifacts and obtains the appropriate authority before releasing from
 `publish`. The operator retains deployment/version readback on the work card.
+
+## D10 — Manual npm publication checks the pushed publish source (VO-3522)
+
+This implementation decision extends D9; it is this card's proposal, not an
+owner-locked ruling. D9's workflow retirement remains in force. No Actions
+workflow is retained or added, so no CI execution or publication follows a main
+push. The orphaned `.github/autorelease.mjs`, which calculated version bumps for
+main, is retired too.
+
+Each of the three npm packages checks a shared guard before its publication
+build. The source must be on a clean local `publish` branch, and HEAD must equal
+the live `refs/heads/publish` read from origin. A missing branch, a failed Git
+read or a detached checkout stops publication. Git reads share an eight-second
+deadline and do not prompt for credentials. The guard never fetches, commits or
+pushes; ordinary builds and packing remain independent of publication.
+
+Because npm skips `prepublishOnly` for a packed tarball, `publish:packed` provides
+the same guard for the authorized exact-artifact release path. It identifies the
+tarballs by SHA-256 and publishes the already prepared bytes in operator-supplied
+dependency order, stopping on a failure. A guard is not a grant of authority:
+the release card must carry the applicable permission and exact artifact sweep.
+Creating or advancing the remote `publish` branch remains an explicitly
+authorized publication act; integration never creates it on the operator's behalf.
+
+See [PUBLISHING.md](./PUBLISHING.md) for preparation, authority and readback.
