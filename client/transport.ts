@@ -188,7 +188,8 @@ export function handleWsUpgrade(
   controlWs: WebSocket,
   msg: WsUpgradeMsg,
   localWsConnections: Map<CorrelationId, WebSocket>,
-  log: TunnelLogger
+  log: TunnelLogger,
+  publicOrigin?: string
 ): void {
   const wsHost = localAddr.includes(':') ? `[${localAddr}]` : localAddr;
   const localWsUrl = `ws://${wsHost}:${port}${msg.path}`;
@@ -221,7 +222,13 @@ export function handleWsUpgrade(
   const hostHeader = localWsHostHeader(port);
   if (hostHeader) headers.host = hostHeader;
   else delete headers.host;
-  headers.origin = `http://localhost:${port}`;
+  // Translate only a same-origin browser handshake. Bun uses the dialed
+  // address as Host, so localhost would disagree with its 127.0.0.1/::1 Host
+  // and prevent a downstream proxy from translating Origin to its public URL.
+  // Keep foreign, opaque and absent origins for the application's own guard.
+  if (publicOrigin !== undefined && headers.origin === publicOrigin) {
+    headers.origin = `http://${hostHeader ?? `${wsHost}:${port}`}`;
+  }
   for (const hopByHop of [
     'connection',
     'upgrade',
@@ -270,6 +277,7 @@ export function handleWsUpgrade(
       JSON.stringify({
         type: 'ws-ready',
         connId: msg.connId,
+        protocol: localWs.protocol,
       })
     );
   });

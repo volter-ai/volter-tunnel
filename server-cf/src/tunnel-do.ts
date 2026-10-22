@@ -81,7 +81,7 @@ interface Streaming {
   idle: ReturnType<typeof setTimeout>;
 }
 interface PendingUpgrade {
-  resolve: () => void;
+  resolve: (protocol: unknown) => void;
   reject: (e: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -731,7 +731,7 @@ export class TunnelDO extends DurableObject<Env> {
 
     // Await ws-ready BEFORE returning 101 — so the browser's socket only opens
     // once the local end is connected. This removes the message-buffering dance a single-process relay needs (it can't delay its upgrade).
-    const ready = new Promise<void>((resolve, reject) => {
+    const ready = new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingUpgrades.delete(connId);
         reject(new Error('ws-upgrade timeout'));
@@ -739,8 +739,9 @@ export class TunnelDO extends DurableObject<Env> {
       this.pendingUpgrades.set(connId, { resolve, reject, timer });
     });
     sendFrame(ctl, { type: 'ws-upgrade', connId, path: cleanPath, headers: forwardHeaders });
+    let protocol: unknown;
     try {
-      await ready;
+      protocol = await ready;
     } catch {
       try {
         server.close(1011, 'tunnel timeout');
@@ -749,7 +750,18 @@ export class TunnelDO extends DurableObject<Env> {
       }
       return new Response('tunnel timeout', { status: 504 });
     }
-    return new Response(null, { status: 101, webSocket: client });
+    const offered = request.headers.get('sec-websocket-protocol')?.split(',').map((value) => value.trim()) ?? [];
+    // Echo the local server's selection, never guess from the browser's offers.
+    // Older clients and upstreams selecting no protocol keep a headerless 101.
+    if (protocol !== undefined && protocol !== '' && (typeof protocol !== 'string' || !offered.includes(protocol))) {
+      server.close(1002, 'invalid subprotocol');
+      return new Response('Invalid upstream WebSocket subprotocol', { status: 502 });
+    }
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      headers: typeof protocol === 'string' && protocol !== '' ? { 'sec-websocket-protocol': protocol } : {},
+    });
   }
 
   // ── hibernation handlers ──────────────────────────────────────────────────
@@ -1244,7 +1256,7 @@ export class TunnelDO extends DurableObject<Env> {
       if (p) {
         clearTimeout(p.timer);
         this.pendingUpgrades.delete(msg.connId as string);
-        p.resolve();
+        p.resolve(msg.protocol);
       }
       return;
     }
