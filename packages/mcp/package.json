@@ -29,7 +29,7 @@
   },
   "scripts": {
     "build": "tsup",
-    "prepublishOnly": "bun run build",
+    "prepublishOnly": "node ../../.github/require-publish-branch.mjs && bun run build",
     "test": "bun test"
   }
 }
