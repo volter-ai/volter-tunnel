@@ -115,6 +115,16 @@ const MSG_FLUSH_EVERY = 32;
 /** Max requests retained in the live inspector ring (#5). */
 const INSPECT_CAP = 50;
 
+// A connector's first reconnect starts after 1s. Keep an undispatched read
+// through that handoff, without waiting indefinitely on an offline tunnel.
+const READ_RECONNECT_MS = 3000;
+const READ_RECONNECT_CAP = 64;
+interface ControlLoss {
+  at: number;
+  code: number;
+  wasClean: boolean;
+}
+
 function b64encode(bytes: Uint8Array): string {
   let s = '';
   for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]!);
@@ -170,6 +180,7 @@ export class TunnelDO extends DurableObject<Env> {
   private pendingHttp = new Map<string, PendingHttp>();
   private streaming = new Map<string, Streaming>();
   private pendingUpgrades = new Map<string, PendingUpgrade>();
+  private reconnectWaiters = new Set<() => void>();
 
   /** Operator response-header rewrite rules (parsed once from env). */
   private _headerRules: HeaderRules | null = null;
@@ -492,12 +503,85 @@ export class TunnelDO extends DurableObject<Env> {
   // ── control socket helpers ────────────────────────────────────────────────
   private ctl(): WebSocket | null {
     const arr = this.ctx.getWebSockets('ctl');
-    const registered = arr.find((ws) => (ws.deserializeAttachment() as CtlAttach | null)?.registered);
-    return (registered ?? arr[0] ?? null) as WebSocket | null;
+    return (arr.find((ws) => {
+      const attach = ws.deserializeAttachment() as CtlAttach | null;
+      return ws.readyState === WebSocket.OPEN && attach?.registered && !attach.superseded;
+    }) ?? null) as WebSocket | null;
   }
   private ctlAttach(): CtlAttach | null {
     const ws = this.ctl();
     return ws ? (ws.deserializeAttachment() as CtlAttach) : null;
+  }
+
+  /** This request has never been sent. Wake on an authorized registration,
+   * then let the ordinary auth and metering preamble decide whether to relay it.
+   * No write or in-flight request is retried. Persist the loss (not requests) so
+   * hibernation between close and the next read preserves the bounded window. */
+  private async readControl(request: Request): Promise<WebSocket | null> {
+    const active = this.ctl();
+    if (active || (request.method !== 'GET' && request.method !== 'HEAD') || request.signal.aborted) return active;
+    const loss = await this.ctx.storage.get<ControlLoss>('controlLoss');
+    const remaining = loss ? READ_RECONNECT_MS - (Date.now() - loss.at) : 0;
+    if (!loss || ![1006, 1011, 1012, 1013].includes(loss.code) || remaining <= 0) return this.ctl();
+    if (this.reconnectWaiters.size >= READ_RECONNECT_CAP) return this.ctl();
+    const started = Date.now();
+    const control = await new Promise<WebSocket | null>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.reconnectWaiters.delete(done);
+        request.signal.removeEventListener('abort', done);
+        resolve(request.signal.aborted ? null : this.ctl());
+      };
+      const timer = setTimeout(done, remaining);
+      this.reconnectWaiters.add(done);
+      request.signal.addEventListener('abort', done, { once: true });
+      // Registration or cancellation may have completed during the storage read.
+      if (this.ctl() || request.signal.aborted) done();
+    });
+    console.log(
+      JSON.stringify({
+        event: 'tunnel.read-reconnect',
+        at: new Date().toISOString(),
+        ray: request.headers.get('cf-ray'),
+        method: request.method,
+        code: loss.code,
+        waitedMs: Date.now() - started,
+        connected: !!control,
+        aborted: request.signal.aborted,
+      })
+    );
+    return control;
+  }
+
+  private unavailable(request: Request, message: string, cause?: unknown): Response {
+    console.error(
+      JSON.stringify({
+        event: 'tunnel.http-failure',
+        at: new Date().toISOString(),
+        boundary: 'relay-control',
+        ray: request.headers.get('cf-ray'),
+        method: request.method,
+        status: 502,
+        error: message,
+        ...(cause === undefined ? {} : { cause: this.socketDiagnostic(cause) }),
+      })
+    );
+    return new Response(message, {
+      status: 502,
+      headers: { ...corsHeaders(request), 'cache-control': 'no-store', 'x-volter-failure-boundary': 'relay-control' },
+    });
+  }
+
+  private socketDiagnostic(value: unknown): string {
+    let message = value instanceof Error ? `${value.name}: ${value.message}` : String(value ?? '');
+    for (const secret of [this.env.TUNNEL_SECRET, this.env.JWT_SECRET, this.env.ROOT_TOKEN]) {
+      if (secret) message = message.split(secret).join('[credential]');
+    }
+    return message
+      .replace(/\bvt[ars]_[\w-]+/gi, '[credential]')
+      .replace(/Bearer\s+\S+/gi, 'Bearer [credential]')
+      .replace(/https?:\/\/\S+/gi, '[url]')
+      .slice(0, 512);
   }
 
   private acceptControl(url: URL): Response {
@@ -548,11 +632,9 @@ export class TunnelDO extends DurableObject<Env> {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
-    const ctl = this.ctl();
-    const attach = this.ctlAttach();
-    if (!ctl || !attach?.registered) {
-      return new Response('Tunnel not connected', { status: 502, headers: corsHeaders(request) });
-    }
+    const ctl = await this.readControl(request);
+    const attach = ctl?.deserializeAttachment() as CtlAttach | undefined;
+    if (!ctl || !attach?.registered) return this.unavailable(request, 'Tunnel not connected');
 
     // Per-tunnel request-rate burst limit (#4) — cheap flood guard ahead of auth
     // and forwarding. The daily/monthly credit caps remain the primary limit.
@@ -666,6 +748,10 @@ export class TunnelDO extends DurableObject<Env> {
     }
     const rateHeaders = this.rateHeaders();
 
+    // Auth and account RPCs yield. Never send using a registration replaced
+    // during those awaits, or forward a read whose caller has already left.
+    if (request.signal.aborted || this.ctl() !== ctl) return this.unavailable(request, 'Tunnel connection changed');
+
     const reqId = crypto.randomUUID();
     this.pushInspect(reqId, request.method, url.pathname);
     if (!isReplay && this.replayEnabled) {
@@ -688,10 +774,11 @@ export class TunnelDO extends DurableObject<Env> {
           headers: forwardHeaders,
           body: bodyBytes?.length ? b64encode(bodyBytes) : null,
         });
-      } catch {
+      } catch (error) {
         clearTimeout(timer);
         this.pendingHttp.delete(reqId);
-        resolve(new Response('Tunnel send failed', { status: 502, headers: corsHeaders(request) }));
+        this.finishInspect(reqId, 502, null);
+        resolve(this.unavailable(request, 'Tunnel send failed', error));
       }
     });
   }
@@ -750,7 +837,11 @@ export class TunnelDO extends DurableObject<Env> {
       }
       return new Response('tunnel timeout', { status: 504 });
     }
-    const offered = request.headers.get('sec-websocket-protocol')?.split(',').map((value) => value.trim()) ?? [];
+    const offered =
+      request.headers
+        .get('sec-websocket-protocol')
+        ?.split(',')
+        .map((value) => value.trim()) ?? [];
     // Echo the local server's selection, never guess from the browser's offers.
     // Older clients and upstreams selecting no protocol keep a headerless 101.
     if (protocol !== undefined && protocol !== '' && (typeof protocol !== 'string' || !offered.includes(protocol))) {
@@ -826,7 +917,7 @@ export class TunnelDO extends DurableObject<Env> {
     await this.onControlMessage(ws, msg);
   }
 
-  async webSocketClose(ws: WebSocket): Promise<void> {
+  async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
     const attach = ws.deserializeAttachment() as CtlAttach | BrowserAttach | null;
     if (attach?.role === 'browser') {
       const ctl = this.ctl();
@@ -843,14 +934,37 @@ export class TunnelDO extends DurableObject<Env> {
     // state to the successor. The superseded socket's delayed close is therefore
     // deliberately inert: settling or disconnecting here would clobber traffic
     // already owned by the new registration.
-    if (attach?.role === 'ctl' && (!attach.registered || attach.superseded)) return;
+    if (attach?.role !== 'ctl' || !attach.registered || attach.superseded) return;
+
+    const loss: ControlLoss = { at: Date.now(), code, wasClean };
+    console.error(
+      JSON.stringify({
+        event: 'tunnel.control-close',
+        at: new Date(loss.at).toISOString(),
+        tunnelId: attach.tunnelId,
+        code,
+        reason: this.socketDiagnostic(reason),
+        wasClean,
+        pendingHttp: this.pendingHttp.size,
+        streaming: this.streaming.size,
+      })
+    );
+    ws.serializeAttachment({ ...attach, registered: false } satisfies CtlAttach);
+    // Detach and snapshot synchronously. A successor may register during the
+    // account/storage awaits below; this old close must never clear its traffic
+    // or reset its credits when that settlement finishes.
+    this.disconnectTraffic('Tunnel disconnected');
+    const consumed = this.consumedSinceCommit + this.msgsSinceFlush * CREDIT_WEIGHTS.message;
+    const raw = this.takeRaw();
+    this.consumedSinceCommit = 0;
+    this.msgsSinceFlush = 0;
+    this.budget = 0;
+    await this.ctx.storage.put('controlLoss', loss);
 
     // Settle metering: commit unflushed usage + tunnel-seconds and return any
     // unconsumed lease to the account (recovers budget stranded by hibernation).
     if (attach?.slug) {
       // Fold any unflushed relayed-message ops into the final settlement.
-      this.consumedSinceCommit += this.msgsSinceFlush * CREDIT_WEIGHTS.message;
-      this.msgsSinceFlush = 0;
       const seconds = attach.openedAt ? Math.max(0, (Date.now() - attach.openedAt) / 1000) : 0;
       await this.accountRpc(
         '/close',
@@ -858,28 +972,24 @@ export class TunnelDO extends DurableObject<Env> {
           slug: attach.slug,
           tunnelId: attach.tunnelId,
           regId: attach.regId,
-          consumed: this.consumedSinceCommit,
+          consumed,
           seconds,
-          raw: this.takeRaw(),
+          raw,
         },
         attach.slug
       );
-      this.consumedSinceCommit = 0;
-      this.budget = 0;
 
       // Idle clock starts now: stamp lastSeenAt at disconnect so the reclaim TTL
       // counts from when the owner went away, not from when it first connected
       // (DECISIONS D5). Only the current owner may move its own clock.
       const res = await this.ctx.storage.get<Reservation>('reservation');
-      if (res && res.ownerSlug === attach.slug) {
+      if (res && res.ownerSlug === attach.slug && res.lastSeenAt <= loss.at) {
         await this.ctx.storage.put('reservation', {
           ...res,
-          lastSeenAt: Date.now(),
+          lastSeenAt: loss.at,
         } satisfies Reservation);
       }
     }
-
-    this.disconnectTraffic('Tunnel disconnected');
   }
 
   /** Tear down traffic bound to the current connector. Replacement cannot keep
@@ -941,8 +1051,20 @@ export class TunnelDO extends DurableObject<Env> {
     }, 120000);
   }
 
-  async webSocketError(ws: WebSocket): Promise<void> {
-    await this.webSocketClose(ws);
+  async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
+    // Keep the platform error at its owning boundary, without credential or URL
+    // payloads supplied by a peer. No request headers, queries or bodies enter it.
+    const attach = ws.deserializeAttachment() as CtlAttach | BrowserAttach | null;
+    console.error(
+      JSON.stringify({
+        event: 'tunnel.socket-error',
+        at: new Date().toISOString(),
+        role: attach?.role,
+        error: this.socketDiagnostic(error),
+        code: 1006,
+      })
+    );
+    await this.webSocketClose(ws, 1006, '', false);
   }
 
   // ── control protocol ──────────────────────────────────────────────────────
@@ -1142,6 +1264,7 @@ export class TunnelDO extends DurableObject<Env> {
         url,
         account: auth.rate ? { slug, day: auth.rate.day, month: auth.rate.month, level: auth.rate.level } : undefined,
       });
+      for (const wake of this.reconnectWaiters) wake();
       return;
     }
 
@@ -1171,7 +1294,13 @@ export class TunnelDO extends DurableObject<Env> {
       // Workers strip content-encoding from a constructed Response and assume the
       // body is decoded; a compressed upstream body then ships headerless and the
       // consumer reads gzip bytes as text. encodeBody manual passes both through.
-      pending.resolve(new Response(body, { status: (msg.status as number) || 200, headers, ...(headers.has('content-encoding') ? { encodeBody: 'manual' as const } : {}) } as ResponseInit));
+      pending.resolve(
+        new Response(body, {
+          status: (msg.status as number) || 200,
+          headers,
+          ...(headers.has('content-encoding') ? { encodeBody: 'manual' as const } : {}),
+        } as ResponseInit)
+      );
       return;
     }
 
@@ -1218,7 +1347,13 @@ export class TunnelDO extends DurableObject<Env> {
           }
         },
       });
-      pending.resolve(new Response(readable, { status, headers, ...(headers.has('content-encoding') ? { encodeBody: 'manual' as const } : {}) } as ResponseInit));
+      pending.resolve(
+        new Response(readable, {
+          status,
+          headers,
+          ...(headers.has('content-encoding') ? { encodeBody: 'manual' as const } : {}),
+        } as ResponseInit)
+      );
       return;
     }
 
