@@ -138,6 +138,10 @@ const INSPECT_CAP = 50;
 // through that handoff, without waiting indefinitely on an offline tunnel.
 const READ_RECONNECT_MS = 3000;
 const READ_RECONNECT_CAP = 64;
+// Each call to the account or registry object is bounded (DECISIONS D11). A registration waits behind the lost
+// connection's settlement on one ordered chain; unbounded, one stalled call held a reconnect past the connector's
+// 10 s attempt. Measured calls take 20-171 ms; a call past this bound answers null, the existing unavailable path.
+const OBJECT_RPC_MS = 2500;
 interface ControlLoss {
   at: number;
   code: number;
@@ -328,26 +332,28 @@ export class TunnelDO extends DurableObject<Env> {
   private async accountRpc<T>(path: string, payload: Record<string, unknown>, slug?: string): Promise<T | null> {
     const stub = this.accountStub(slug ?? (payload.slug as string | undefined));
     if (!stub) return null;
-    try {
-      const res = await stub.fetch(`https://account${path}`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-      return (await res.json()) as T;
-    } catch {
-      return null;
-    }
+    return this.boundedRpc<T>(stub, `https://account${path}`, payload);
   }
 
   private async registryRpc<T>(path: string, payload: Record<string, unknown>): Promise<T | null> {
+    return this.boundedRpc<T>(this.env.REGISTRY.get(this.env.REGISTRY.idFromName('registry')), `https://registry${path}`, payload);
+  }
+
+  /** One call to another object, answered within OBJECT_RPC_MS or null (its callers' unavailable path: a refused
+   *  registration says 'account unavailable' and the connector retries; a refused lease grants nothing). */
+  private async boundedRpc<T>(stub: DurableObjectStub, url: string, payload: Record<string, unknown>): Promise<T | null> {
+    const started = Date.now();
     try {
-      const stub = this.env.REGISTRY.get(this.env.REGISTRY.idFromName('registry'));
-      const res = await stub.fetch(`https://registry${path}`, {
+      const res = await stub.fetch(url, {
         method: 'POST',
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(OBJECT_RPC_MS),
       });
       return (await res.json()) as T;
-    } catch {
+    } catch (error) {
+      if ((error as { name?: string } | null)?.name === 'TimeoutError') {
+        console.error(JSON.stringify({ event: 'tunnel.object-rpc-timeout', at: new Date().toISOString(), path: new URL(url).pathname, waitedMs: Date.now() - started }));
+      }
       return null;
     }
   }
