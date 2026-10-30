@@ -41,10 +41,10 @@ commit before requesting release authority. `publish` is created or advanced onl
 owner's explicit publication authorization; no other permission moves it. A relay release
 is a limited release: it needs the manager's permission after review, goes out by
 `wrangler deploy`, and never creates or advances `publish`. A documentation-site release
-needs the owner's word. An npm release publishes from `publish`, so it needs the owner's
-explicit publication authorization and the manager's permission after a key sweep over
-the exact packed tarball using gitleaks rules, custody values and `@volter/teams/redact`.
-Never print, copy or commit custody.
+needs the owner's word. An npm release takes the manager's permission once a keys sweep
+over the exact packed tarball, using gitleaks rules, custody values and
+`@volter/teams/redact`, finds nothing (the owner's npm exception, 2026-10-21); it does not
+create or advance `publish`. Never print, copy or commit custody.
 
 After authorization, the operator reads the required credential in place, publishes
 the prepared artifacts (core → client → mcp for npm; `wrangler deploy` for the relay),
@@ -60,10 +60,11 @@ operator's diagnosis of a failed operation.
 
 ### npm: prepare, authorize, publish
 
-There is no npm publication workflow. All three packages' `prepublishOnly` hooks
-refuse main, feature branches, detached HEAD, a dirty working tree, and a HEAD
-different from the actual `origin/publish` branch on GitHub. The check reads Git;
-it never creates or advances a branch, changes versions, or writes back to main.
+There is no npm publication workflow. The authority is the manager's permission after
+the keys sweep (above); an npm release does not advance `publish`. The packages'
+`prepublishOnly` hooks and `publish:packed` (DECISIONS D10) still refuse any HEAD other
+than the actual `origin/publish` branch on GitHub. That guard predates the npm route and
+contradicts it, so it is changed when the npm path is next used; it is not the rule.
 `npm pack` and ordinary builds remain available on integration branches.
 
 1. Prepare the reviewed release source and its final versions and dependency pins.
@@ -90,18 +91,12 @@ it never creates or advances a branch, changes versions, or writes back to main.
 
    Record the source SHA and each tarball's SHA-256. Sweep those exact tarballs
    with gitleaks' rules, custody values and `@volter/teams/redact`, without
-   printing, copying or committing custody. Obtain the owner's explicit publication
-   authorization and the manager's permission after that sweep; the manager's
-   permission alone never creates or advances `publish`. Permission names
-   the exact source, target and tarball hashes; it is not implied by a merge.
+   printing, copying or committing custody. Obtain the manager's permission once
+   that sweep finds nothing. Permission names the exact source, target and tarball
+   hashes; it is not implied by a merge, and it does not move `publish`.
 
-3. Only after authorization, explicitly create or advance the dedicated remote
-   `publish` branch to that authorized source commit. A normal fast-forward push
-   is sufficient; never force it or automatically move it when main changes.
-   If it cannot fast-forward, resolve the source and authorization before
-   proceeding. Release from a clean local branch named `publish` at that pushed
-   commit. This arc does not itself authorize creating the branch or releasing
-   any package.
+3. Release from a clean checkout of that authorized source commit. Until the guard
+   above is changed with the npm path, the next step's branch check refuses it.
 
 4. From that checkout, publish the approved tarballs through the guarded door:
 
