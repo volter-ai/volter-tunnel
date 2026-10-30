@@ -38,8 +38,8 @@ workflows are retired (DECISIONS D9). No merge or tag starts a release.
 
 Prepare the exact reviewed source, build the artifacts, and identify the target and
 commit before requesting release authority. Only create or advance `publish` after
-release authorization. A public relay or documentation release needs the owner's word;
-a limited release needs the manager's permission. An npm release needs the manager's
+release authorization. A relay release is a limited release: it needs the manager's
+permission after review. A documentation-site release needs the owner's word. An npm release needs the manager's
 permission after a key sweep over the exact packed tarball using gitleaks rules,
 custody values and `@volter/teams/redact`. Never print, copy or commit custody.
 
