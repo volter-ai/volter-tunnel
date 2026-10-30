@@ -58,15 +58,21 @@ export function createTunnel({
   let everRegistered = false;
   // The control socket's last close, as the server or the network ended it: logged with each reconnect, so a disconnect
   // says why (1006 is a connection lost without a close frame).
-  let lastClose: { code: number; reason: string } | undefined;
+  let lastClose: { code: number; reason: string; livedMs?: number; sincePongMs?: number | null; sinceMessageMs?: number | null; inFlightHttp?: number; localWs?: number } | undefined;
+  // When the last registered connection ended: the next registration says how long the tunnel was away.
+  let lastEndAt: number | undefined;
 
   function scheduleReconnect(onRegistered: (handle: TunnelHandle) => void, registered: boolean): void {
     if (closed) return;
     const delay = reconnectDelay;
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
     log.info(
-      { component: 'tunnel_client', action: 'reconnecting', port, delay, registered, closeCode: lastClose?.code, closeReason: lastClose?.reason },
+      { component: 'tunnel_client', action: 'reconnecting', port, delay, registered, closeCode: lastClose?.code, closeReason: lastClose?.reason,
+        livedMs: lastClose?.livedMs, sincePongMs: lastClose?.sincePongMs, sinceMessageMs: lastClose?.sinceMessageMs, inFlightHttp: lastClose?.inFlightHttp, localWs: lastClose?.localWs },
+      // How the link stood when it ended: a link that went quiet (no pong, no message) before the end differs from one cut
+      // while traffic flowed; requests still being answered have no way back once it is gone.
       `${new Date().toISOString()} Tunnel disconnected (close ${lastClose?.code ?? 'unknown'}${lastClose?.reason ? `: ${lastClose.reason}` : ''}), reconnecting in ${delay}ms`
+        + (lastClose?.livedMs !== undefined ? ` [lived ${lastClose.livedMs}ms, last pong ${lastClose.sincePongMs ?? 'none'}ms ago, last message ${lastClose.sinceMessageMs ?? 'none'}ms ago, in-flight http ${lastClose.inFlightHttp}, local ws ${lastClose.localWs}]` : '')
     );
     lastClose = undefined;
     // Keep this timer referenced so a failed attempt cannot drain the event loop.
@@ -89,6 +95,11 @@ export function createTunnel({
 
     const ws = new WebSocket(wsUrl, wsUrl.startsWith('wss:') ? { agent: http1Agent } : {});
     let registered = false;
+    // This connection's life, for the line its end writes: when it registered, its last pong and its last message.
+    let registeredAt: number | undefined;
+    let lastPongAt: number | undefined;
+    let lastMessageAt: number | undefined;
+    ws.on('pong', () => { lastPongAt = Date.now(); });
     let publicOrigin: string | undefined;
     // Hoisted so every teardown path (a reconnect via the 'close' handler, or an
     // explicit handle.close()) can clear it. It used to be declared inside the
@@ -134,6 +145,7 @@ export function createTunnel({
     });
 
     ws.on('message', (data: WebSocket.RawData) => {
+      lastMessageAt = Date.now();
       let msg: RelayToClient;
       try {
         msg = JSON.parse(data.toString());
@@ -161,6 +173,7 @@ export function createTunnel({
       }
 
       if (msg.type === 'registered') {
+        registeredAt = Date.now();
         publicOrigin = new URL(msg.url).origin;
         clearTimeout(timeout);
         registered = true;
@@ -196,8 +209,8 @@ export function createTunnel({
             dayLimit: msg.account?.day.limit,
           },
           msg.account
-            ? `Tunnel registered: localhost:${port} → ${msg.url} (${msg.account.slug}: ${msg.account.day.remaining}/${msg.account.day.limit} credits today)`
-            : `Tunnel registered: localhost:${port} → ${msg.url}`
+            ? `${new Date().toISOString()} Tunnel registered: localhost:${port} → ${msg.url} (${msg.account.slug}: ${msg.account.day.remaining}/${msg.account.day.limit} credits today)${lastEndAt !== undefined ? ` after ${Date.now() - lastEndAt}ms away` : ''}`
+            : `${new Date().toISOString()} Tunnel registered: localhost:${port} → ${msg.url}${lastEndAt !== undefined ? ` after ${Date.now() - lastEndAt}ms away` : ''}`
         );
         onRegistered({
           url: msg.url,
@@ -350,7 +363,12 @@ export function createTunnel({
       endedOnce = true;
       // An attempt ended by its error or timeout leaves no socket behind the reconnect.
       try { ws.terminate(); } catch {}
-      lastClose = { code, reason: reason.slice(0, 200) };
+      const endedAt = Date.now();
+      lastClose = { code, reason: reason.slice(0, 200), ...(registeredAt !== undefined ? {
+        livedMs: endedAt - registeredAt, sincePongMs: lastPongAt === undefined ? null : endedAt - lastPongAt,
+        sinceMessageMs: lastMessageAt === undefined ? null : endedAt - lastMessageAt, inFlightHttp: activeRequests.size, localWs: localWsConnections.size,
+      } : {}) };
+      if (registeredAt !== undefined) lastEndAt = endedAt;
       clearTimeout(timeout);
       if (keepaliveInterval) {
         clearInterval(keepaliveInterval);
