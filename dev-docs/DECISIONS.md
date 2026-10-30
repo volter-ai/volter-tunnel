@@ -301,3 +301,13 @@ Creating or advancing the remote `publish` branch remains an explicitly
 authorized publication act; integration never creates it on the operator's behalf.
 
 See [PUBLISHING.md](./PUBLISHING.md) for preparation, authority and readback.
+
+## D11 — Calls to the account and registry objects are bounded (VO-3782)
+
+A TunnelDO's calls to its AccountDO and to the RegistryDO answer within 2.5 s or count as unavailable. A registration
+runs behind the lost connection's settlement on one ordered chain (D8). Before this, one stalled call could hold a
+reconnect past the connector's 10 s attempt, which ends with no reason (two such attempts on 2026-10-29 23:59Z). Calls
+measured at the relay took 20-171 ms. A call past the bound takes the path an unreachable object already took: a
+registration is refused as 'account unavailable' (4029) and the connector reconnects; a lease grants nothing; a final
+/close that misses is left to the account's reaping. Each such timeout is logged as tunnel.object-rpc-timeout. This is
+an implementation decision, not an owner-locked ruling.
