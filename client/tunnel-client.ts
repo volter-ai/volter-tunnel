@@ -94,6 +94,10 @@ export function createTunnel({
     if (closed) return;
 
     const ws = new WebSocket(wsUrl, wsUrl.startsWith('wss:') ? { agent: http1Agent } : {});
+    // This attempt's stages, for a timeout to say where it stood: the socket (DNS, TCP, TLS, upgrade) not yet open, or
+    // open with the register sent and no 'registered' back.
+    const attemptAt = Date.now();
+    let openedAt: number | undefined;
     let registered = false;
     // This connection's life, for the line its end writes: when it registered, its last pong and its last message.
     let registeredAt: number | undefined;
@@ -128,10 +132,13 @@ export function createTunnel({
         onFirstError(new Error('Tunnel connection timeout'));
         onFirstError = null;
       }
-      ended(1006, 'connection timeout');
+      ended(1006, openedAt === undefined
+        ? `connection timeout: the socket never opened in ${Date.now() - attemptAt}ms`
+        : `connection timeout: the socket opened after ${openedAt - attemptAt}ms, no registered reply in ${Date.now() - openedAt}ms`);
     }, 10000);
 
     ws.on('open', () => {
+      openedAt = Date.now();
       ws.send(
         JSON.stringify({
           type: 'register',
