@@ -46,7 +46,11 @@ custody values and `@volter/teams/redact`. Never print, copy or commit custody.
 After authorization, the operator reads the required credential in place, publishes
 the prepared artifacts (core → client → mcp for npm; `wrangler deploy` for the relay),
 records the resulting versions/deployment id, and reads back the released target.
-Preserve existing relay bindings, routes, secrets and account authority. Updating
+Preserve existing relay bindings, routes, secrets and account authority.
+The relay's `wrangler deploy` needs one credential with both Workers Scripts edit on the account and
+Workers Routes edit on the relay's zone. A Workers-only credential uploads the script, which then
+serves, and fails re-asserting the zone routes ("No access"), so the deploy exits non-zero after
+the release has landed. Updating
 account limits is an explicit authenticated admin operation; never rotate the root
 credential merely to invoke that operation. No retrying workflow replaces an
 operator's diagnosis of a failed operation.
