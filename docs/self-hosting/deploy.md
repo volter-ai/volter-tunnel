@@ -52,8 +52,9 @@ All commands run from `server-cf/`.
 
 ## 3. Deploy
 
-For the Volter-managed public relay, obtain the owner’s word for the exact reviewed
-commit before deployment. Merging main or creating a tag never authorizes publication.
+For the Volter-managed relay, a release is a limited release: it needs the manager's
+permission for the exact reviewed commit before deployment. Merging main or creating a
+tag never authorizes publication.
 
 ```bash
 cd server-cf

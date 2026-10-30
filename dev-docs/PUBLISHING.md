@@ -37,11 +37,14 @@ publication, relay deployment, Pages build/deployment and account-limit rotation
 workflows are retired (DECISIONS D9). No merge or tag starts a release.
 
 Prepare the exact reviewed source, build the artifacts, and identify the target and
-commit before requesting release authority. Only create or advance `publish` after
-release authorization. A public relay or documentation release needs the owner's word;
-a limited release needs the manager's permission. An npm release needs the manager's
-permission after a key sweep over the exact packed tarball using gitleaks rules,
-custody values and `@volter/teams/redact`. Never print, copy or commit custody.
+commit before requesting release authority. `publish` is created or advanced only on the
+owner's explicit publication authorization; no other permission moves it. A relay release
+is a limited release: it needs the manager's permission after review, goes out by
+`wrangler deploy`, and never creates or advances `publish`. A documentation-site release
+needs the owner's word. An npm release publishes from `publish`, so it needs the owner's
+explicit publication authorization and the manager's permission after a key sweep over
+the exact packed tarball using gitleaks rules, custody values and `@volter/teams/redact`.
+Never print, copy or commit custody.
 
 After authorization, the operator reads the required credential in place, publishes
 the prepared artifacts (core → client → mcp for npm; `wrangler deploy` for the relay),
@@ -87,8 +90,9 @@ it never creates or advances a branch, changes versions, or writes back to main.
 
    Record the source SHA and each tarball's SHA-256. Sweep those exact tarballs
    with gitleaks' rules, custody values and `@volter/teams/redact`, without
-   printing, copying or committing custody. Obtain the owner's release authority,
-   or the manager's npm carve-out permission after that sweep. Permission names
+   printing, copying or committing custody. Obtain the owner's explicit publication
+   authorization and the manager's permission after that sweep; the manager's
+   permission alone never creates or advances `publish`. Permission names
    the exact source, target and tarball hashes; it is not implied by a merge.
 
 3. Only after authorization, explicitly create or advance the dedicated remote
