@@ -16,11 +16,13 @@ const tunnel = await createTunnel({
 
 console.log(tunnel.url)
 // … later
-tunnel.close()
+await tunnel.close()
 ```
 
 `createTunnel` resolves once the tunnel is registered and serving. The returned
-handle exposes the public `url` and a `close()` to tear it down.
+handle exposes the public `url` and an idempotent `close()` that joins its owned
+sockets and requests. Pass `signal` to cancel acquisition or a serving tunnel;
+acquisition rejection also joins cleanup.
 
 ## `VolterClient`
 

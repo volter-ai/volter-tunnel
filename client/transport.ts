@@ -142,18 +142,21 @@ export function safeClose(ws: WebSocket, code?: number, reason?: string): void {
  * Tries 127.0.0.1 (IPv4) first, then ::1 (IPv6).
  * Returns the working address, or '127.0.0.1' as default.
  */
-export async function resolveLocalHost(port: number): Promise<string> {
+export async function resolveLocalHost(port: number, signal?: AbortSignal): Promise<string> {
   for (const addr of ['127.0.0.1', '::1']) {
-    const ok = await new Promise<boolean>((resolve) => {
-      const sock = net.connect({ host: addr, port }, () => {
-        sock.destroy();
-        resolve(true);
+    signal?.throwIfAborted();
+    const ok = await new Promise<boolean>((resolve, reject) => {
+      const sock = net.connect({ host: addr, port });
+      let connected = false;
+      const cancel = () => sock.destroy();
+      sock.once('connect', () => { connected = true; sock.destroy(); });
+      sock.on('error', () => {});
+      sock.once('close', () => {
+        signal?.removeEventListener('abort', cancel);
+        if (signal?.aborted) reject(signal.reason); else resolve(connected);
       });
-      sock.on('error', () => resolve(false));
-      sock.setTimeout(500, () => {
-        sock.destroy();
-        resolve(false);
-      });
+      signal?.addEventListener('abort', cancel, { once: true });
+      if (signal?.aborted) cancel();
     });
     if (ok) return addr;
   }

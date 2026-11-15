@@ -37,6 +37,7 @@ export function createTunnel({
   authRequired,
   basicAuth,
   logger,
+  signal,
 }: TunnelOptions): Promise<TunnelHandle> {
   const log = logger ?? defaultLogger;
   // Include the tunnelId in the control URL so a routing relay (e.g. the
@@ -50,7 +51,60 @@ export function createTunnel({
   let localHost = '127.0.0.1';
 
   // Shared state across reconnections
+  signal?.throwIfAborted();
   let closed = false;
+  const lifetime = new AbortController();
+  const sockets = new Map<WebSocket, Promise<void>>();
+  const requests = new Map<http.ClientRequest, Promise<void>>();
+  const pending = new Set<Promise<unknown>>();
+  const cleanups = new Set<Promise<void>>();
+  const cleanupErrors: unknown[] = [];
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let closing: Promise<void> | undefined;
+  let rejectAcquisition: ((error: unknown) => void) | undefined;
+  const ownSocket = (socket: WebSocket) => {
+    const joined = socket.readyState === WebSocket.CLOSED ? Promise.resolve() : new Promise<void>(done => socket.once('close', () => done()));
+    sockets.set(socket, joined);
+    void joined.then(() => sockets.delete(socket));
+    return joined;
+  };
+  const ownRequest = (request: http.ClientRequest) => {
+    const joined = request.closed ? Promise.resolve() : new Promise<void>(done => request.once('close', () => done()));
+    requests.set(request, joined);
+    void joined.then(() => requests.delete(request));
+    return request;
+  };
+  const operation = <T>(work: Promise<T>): Promise<T> => {
+    pending.add(work);
+    void work.finally(() => pending.delete(work)).catch(() => {});
+    return work;
+  };
+  function close(): Promise<void> {
+    if (closing) return closing;
+    closed = true;
+    lifetime.abort();
+    clearTimeout(reconnectTimer);
+    closing = (async () => {
+      const joins = [...sockets.values(), ...requests.values()];
+      for (const socket of sockets.keys()) {
+        try { if (socket.readyState !== WebSocket.CLOSED) socket.terminate(); }
+        catch (error) { cleanupErrors.push(error); }
+      }
+      for (const request of requests.keys()) {
+        try { request.destroy(); } catch (error) { cleanupErrors.push(error); }
+      }
+      await Promise.all(joins);
+      await Promise.allSettled([...pending, ...cleanups]);
+      signal?.removeEventListener('abort', cancelled);
+      if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'Tunnel cleanup failed');
+    })();
+    return closing;
+  }
+  function fail(error: unknown): void {
+    void close().then(() => rejectAcquisition?.(error), cleanup => rejectAcquisition?.(new AggregateError([error, cleanup], 'Tunnel acquisition and cleanup failed')));
+  }
+  const cancelled = () => fail(signal?.reason);
+  signal?.addEventListener('abort', cancelled, { once: true });
   let reconnectDelay = 1000;
   const MAX_RECONNECT_DELAY = 30000;
   // Set to true on any successful registration. Once true, reconnect attempts that
@@ -70,7 +124,7 @@ export function createTunnel({
     );
     lastClose = undefined;
     // Keep this timer referenced so a failed attempt cannot drain the event loop.
-    setTimeout(() => {
+    reconnectTimer = setTimeout(() => {
       if (closed) return;
       try {
         connect(onRegistered, null);
@@ -88,14 +142,9 @@ export function createTunnel({
     if (closed) return;
 
     const ws = new WebSocket(wsUrl, wsUrl.startsWith('wss:') ? { agent: http1Agent } : {});
+    const controlClosed = ownSocket(ws);
     let registered = false;
     let publicOrigin: string | undefined;
-    // Hoisted so every teardown path (a reconnect via the 'close' handler, or an
-    // explicit handle.close()) can clear it. It used to be declared inside the
-    // 'registered' handler and cleared only on explicit close — so each reconnect
-    // leaked an interval that kept firing ws.ping() on a dead socket forever, and
-    // when the control connection flaps (reconnecting every second) those pile up
-    // fast.
     let keepaliveInterval: ReturnType<typeof setInterval> | null = null;
     // Resets the reconnect backoff once the link has proven stable (see the
     // 'registered' handler). Cleared on close so a connection that drops before
@@ -107,20 +156,12 @@ export function createTunnel({
     const localWsConnections = new Map<CorrelationId, WebSocket>();
     // Track active HTTP requests for abort support: reqId → http.ClientRequest
     const activeRequests = new Map<CorrelationId, http.ClientRequest>();
-
-    // A socket still connecting when it is closed may never say 'close' (Bun's): the timeout ends this attempt itself,
-    // so its reconnect is scheduled whether or not the socket reports the close. Before, nothing was left scheduled and
-    // the client exited 0 after a disconnect.
-    const timeout = setTimeout(() => {
-      try { ws.terminate(); } catch { try { ws.close(); } catch {} }
-      if (onFirstError) {
-        onFirstError(new Error('Tunnel connection timeout'));
-        onFirstError = null;
-      }
-      ended(1006, 'connection timeout');
-    }, 10000);
+    const attemptStop = new AbortController();
+    const attemptSockets = new Set<WebSocket>();
+    const attemptRequests = new Set<http.ClientRequest>();
 
     ws.on('open', () => {
+      if (closed) return;
       ws.send(
         JSON.stringify({
           type: 'register',
@@ -134,6 +175,7 @@ export function createTunnel({
     });
 
     ws.on('message', (data: WebSocket.RawData) => {
+      if (closed || endedOnce) return;
       let msg: RelayToClient;
       try {
         msg = JSON.parse(data.toString());
@@ -151,8 +193,7 @@ export function createTunnel({
       );
 
       if (msg.type === 'error') {
-        clearTimeout(timeout);
-        if (msg.fatal) closed = true;
+        if (msg.fatal) { fail(new Error(`Tunnel server rejected connection: ${msg.message}`)); return; }
         if (onFirstError) {
           onFirstError(new Error(`Tunnel server rejected connection: ${msg.message}`));
           onFirstError = null;
@@ -162,7 +203,6 @@ export function createTunnel({
 
       if (msg.type === 'registered') {
         publicOrigin = new URL(msg.url).origin;
-        clearTimeout(timeout);
         registered = true;
         everRegistered = true;
         // Reset backoff only once the connection proves stable — NOT the instant
@@ -202,16 +242,7 @@ export function createTunnel({
         onRegistered({
           url: msg.url,
           tunnelId: msg.tunnelId,
-          close: () => {
-            closed = true;
-            if (keepaliveInterval) clearInterval(keepaliveInterval);
-            if (stableTimer) clearTimeout(stableTimer);
-            for (const [, localWs] of localWsConnections) {
-              safeClose(localWs);
-            }
-            localWsConnections.clear();
-            ws.close();
-          },
+          close,
         });
       }
 
@@ -232,10 +263,11 @@ export function createTunnel({
 
       if (msg.type === 'request') {
         try {
-          const localReq = forwardRequest(port, localHost, msg, ws, activeRequests, log, async (err) => {
+          const localReq = forwardRequest(port, localHost, msg, ws, activeRequests, log, (err) => operation((async () => {
             // On ECONNREFUSED, re-resolve loopback and retry once
             if (err.code === 'ECONNREFUSED') {
-              const newAddr = await resolveLocalHost(port);
+              const newAddr = await operation(resolveLocalHost(port, AbortSignal.any([lifetime.signal, attemptStop.signal])));
+              if (closed || endedOnce) return false;
               if (newAddr !== localHost) {
                 log.info(
                   {
@@ -249,13 +281,15 @@ export function createTunnel({
                 );
                 localHost = newAddr;
                 const retryReq = forwardRequest(port, localHost, msg, ws, activeRequests, log);
-                activeRequests.set(msg.reqId, retryReq);
+                activeRequests.set(msg.reqId, ownRequest(retryReq));
+                attemptRequests.add(retryReq);
                 return true; // suppressed the error
               }
             }
             return false;
-          });
-          activeRequests.set(msg.reqId, localReq);
+          })()));
+          activeRequests.set(msg.reqId, ownRequest(localReq));
+          attemptRequests.add(localReq);
         } catch (error) {
           activeRequests.delete(msg.reqId);
           const message = error instanceof Error ? error.message : String(error);
@@ -295,6 +329,8 @@ export function createTunnel({
         );
         try {
           handleWsUpgrade(port, localHost, ws, msg, localWsConnections, log, publicOrigin);
+          const localWs = localWsConnections.get(msg.connId);
+          if (localWs) { ownSocket(localWs); attemptSockets.add(localWs); }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           log.warn(
@@ -343,15 +379,15 @@ export function createTunnel({
 
     ws.on('close', (code: number, reason: Buffer) => ended(code, reason.toString()));
 
-    // This attempt's end, once: the socket's close, or its connection timeout.
+    // Join this attempt's resources before a reconnect can admit new traffic.
     let endedOnce = false;
     function ended(code: number, reason: string): void {
       if (endedOnce) return;
       endedOnce = true;
-      // An attempt ended by its error or timeout leaves no socket behind the reconnect.
-      try { ws.terminate(); } catch {}
+      attemptStop.abort();
+      // An error also closes the control socket before a replacement is admitted.
+      try { ws.terminate(); } catch (error) { cleanupErrors.push(error); }
       lastClose = { code, reason: reason.slice(0, 200) };
-      clearTimeout(timeout);
       if (keepaliveInterval) {
         clearInterval(keepaliveInterval);
         keepaliveInterval = null;
@@ -360,11 +396,19 @@ export function createTunnel({
         clearTimeout(stableTimer);
         stableTimer = null;
       }
-      for (const [, localWs] of localWsConnections) {
-        safeClose(localWs);
+      const joins = [controlClosed];
+      for (const localWs of attemptSockets) {
+        const joined = sockets.get(localWs);
+        if (joined) joins.push(joined);
+        try { localWs.terminate(); } catch (error) { cleanupErrors.push(error); }
+      }
+      for (const request of attemptRequests) {
+        const joined = requests.get(request);
+        if (joined) joins.push(joined);
+        try { request.destroy(); } catch (error) { cleanupErrors.push(error); }
       }
       localWsConnections.clear();
-
+      activeRequests.clear();
       if (closed) return;
 
       if (!registered && !everRegistered) {
@@ -374,16 +418,24 @@ export function createTunnel({
           { component: 'tunnel_client', action: 'close_before_registration', port },
           `Tunnel closed before registration completed`
         );
+        onFirstError?.(new Error('Tunnel closed before registration completed'));
+        onFirstError = null;
         return;
       }
 
-      scheduleReconnect(onRegistered, registered);
+      const cleanup = Promise.all(joins).then(() => Promise.allSettled([...pending])).then(() => {
+        if (!closed) scheduleReconnect(onRegistered, registered);
+      });
+      cleanups.add(cleanup);
+      void cleanup.finally(() => cleanups.delete(cleanup)).catch(error => { cleanupErrors.push(error); fail(error); });
     }
   }
 
   return new Promise((resolve, reject) => {
-    // Resolve which loopback address works before connecting
-    resolveLocalHost(port).then((addr) => {
+    rejectAcquisition = reject;
+    if (signal?.aborted) { cancelled(); return; }
+    operation(resolveLocalHost(port, lifetime.signal)).then((addr) => {
+      if (closed) return;
       localHost = addr;
       if (addr !== '127.0.0.1') {
         log.info(
@@ -393,8 +445,8 @@ export function createTunnel({
       }
       connect(
         (handle) => resolve(handle),
-        (err) => reject(err)
+        (err) => fail(err)
       );
-    }).catch(reject);
+    }).catch(fail);
   });
 }

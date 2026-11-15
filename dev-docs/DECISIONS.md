@@ -276,3 +276,18 @@ dropping required work.” No retained Actions workflow performs these operation
 Integration and publication are separate acts; the operator prepares the exact
 reviewed artifacts and obtains the appropriate authority before releasing from
 `publish`. The operator retains deployment/version readback on the work card.
+
+
+## D10. A client lifetime ends on native resource closure
+
+`createTunnel` owns loopback acquisition, every control/reconnect attempt, local
+HTTP requests and WebSockets, and asynchronous address retries. A caller may
+cancel acquisition and the serving lifetime with `TunnelOptions.signal`. The
+returned handle's idempotent `close()` seals admission, cancels acquisition and
+reconnects, terminates owned sockets/requests and joins their actual `close`
+events and admitted continuations. A failed acquisition rejects only after this
+cleanup. Replacement attempts join their predecessor's traffic before reconnecting.
+Cleanup failures remain rejected; elapsed time never confirms disposal. The CLI
+uses the same lifetime for SIGINT/SIGTERM, including before registration, and
+awaits it before exiting. Ordinary relay traffic and registration policy stay
+with their existing transport owners.

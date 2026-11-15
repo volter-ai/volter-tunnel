@@ -337,27 +337,34 @@ if (invokedDirectly()) {
     const i = basicAuthArg.indexOf(':');
     if (i > 0) opts.basicAuth = { user: basicAuthArg.slice(0, i), pass: basicAuthArg.slice(i + 1) };
   }
+  const lifetime = new AbortController();
+  opts.signal = lifetime.signal;
+  const shutdown = () => lifetime.abort(new Error('Tunnel client stopped'));
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
   let handle: TunnelHandle | undefined;
-  const shutdown = () => {
-    handle?.close();
-    process.exit(0);
-  };
-  process.on('SIGTERM', () => {
-    logLifecycle('Tunnel client received SIGTERM');
-    shutdown();
-  });
-  process.on('SIGINT', () => {
-    logLifecycle('Tunnel client received SIGINT');
-    shutdown();
-  });
+  try { handle = await createTunnel(opts); }
+  catch (error) {
+    process.removeListener('SIGTERM', shutdown);
+    process.removeListener('SIGINT', shutdown);
+    if (!lifetime.signal.aborted || error !== lifetime.signal.reason) throw error;
+  }
+  if (handle) {
+    const serving = handle;
+    lifetime.signal.addEventListener('abort', () => {
+      void serving.close().then(() => {
+        process.removeListener('SIGTERM', shutdown);
+        process.removeListener('SIGINT', shutdown);
+      }, error => { console.error(error); process.exitCode = 1; });
+    }, { once: true });
+    if (lifetime.signal.aborted) await serving.close();
+    else console.log(handle.url); // stdout stays machine-readable (just the URL)
 
-  handle = await createTunnel(opts);
-  console.log(handle.url); // stdout stays machine-readable (just the URL)
-
-  // Human-facing connection banner + optional QR → stderr, only on a real TTY
-  // (so piped/non-interactive use stays clean).
-  if (process.stderr.isTTY) {
-    process.stderr.write(formatConnectBanner(handle.url, port) + '\n');
-    if (!args.includes('--no-qr')) await renderQr(handle.url, (s) => process.stderr.write(s));
+    // Human-facing connection banner + optional QR → stderr, only on a real TTY
+    // (so piped/non-interactive use stays clean).
+    if (process.stderr.isTTY) {
+      process.stderr.write(formatConnectBanner(handle.url, port) + '\n');
+      if (!args.includes('--no-qr')) await renderQr(handle.url, (s) => process.stderr.write(s));
+    }
   }
 }

@@ -10,6 +10,8 @@ export interface TunnelLogger {
 }
 
 export interface TunnelOptions {
+  /** Cancels acquisition and closes the serving lifetime; cleanup is joined. */
+  signal?: AbortSignal;
   /** Local port to expose */
   port: number;
   /** Tunnel server URL (e.g., "https://vgit-tunnels.volterapp.com") */
@@ -34,5 +36,5 @@ export interface TunnelHandle {
   /** Assigned tunnel ID */
   tunnelId: string;
   /** Close the tunnel connection */
-  close: () => void;
+  close: () => Promise<void>;
 }
