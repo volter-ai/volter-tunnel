@@ -20,12 +20,16 @@ import type { TunnelLogger } from './types';
 export const http1Agent = new https.Agent({ ALPNProtocols: ['http/1.1'] });
 
 /**
- * The HTTP proxy the standard environment names for the relay, read as curl reads it: `https_proxy`/`HTTPS_PROXY`
- * for a wss:// relay, `http_proxy`/`HTTP_PROXY` for ws://, none when `no_proxy`/`NO_PROXY` lists the relay's host.
- * A NO_PROXY entry is a host that also covers its subdomains (a leading `.` or `*.` means the same), optionally with
- * `:port`; `*` alone covers every host. A proxy written without a scheme is http://. Only an http(s) proxy can carry
- * the CONNECT the socket needs, so another scheme is refused rather than silently bypassed. Errors name the variable,
- * never its value, which may carry credentials.
+ * The HTTP proxy the environment names for the relay's control socket.
+ * - The proxy: `https_proxy`, else `HTTPS_PROXY`, for a wss:// relay; `http_proxy`, else `HTTP_PROXY`, for ws://.
+ *   A value without a scheme is http://. Only an http(s) proxy can carry the CONNECT the socket needs, so another
+ *   scheme is an error rather than a silent bypass.
+ * - The bypass list: `no_proxy`, else `NO_PROXY`; entries separated by commas or whitespace. An entry `*` anywhere in
+ *   the list bypasses every host. `name`, `.name` and `*.name` all match that host and its subdomains. A `:port`
+ *   suffix (`[v6]:port` for IPv6) limits the entry to that port. Addresses match literally; CIDR ranges are not read.
+ * This is not curl's reading: curl ignores upper-case `HTTP_PROXY`, treats `*` as bypass-all only as the whole
+ * value, and does not take `*.name` or `name:port`.
+ * Errors name the variable, never its value, which may carry credentials.
  */
 export function relayProxy(relayUrl: string, env: NodeJS.ProcessEnv = process.env): URL | undefined {
   const target = new URL(relayUrl);
