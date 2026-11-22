@@ -8,6 +8,10 @@ primary_region = 'ewr'
   TUNNEL_DOMAIN = 'vgit-tunnels.volterapp.com'
   TUNNEL_SECURE = 'true'
   EXTERNAL_PORT = '443'
+  # Origins granted credentialed CORS and cookie-authenticated WebSocket upgrades (server.mjs setCorsHeaders): pages
+  # that call tunnels with the __volter_auth cookie. termfleet's cloud console (its Finder's fetchHostInfo); the
+  # minimal-claude frontend, served by its gateways (prod, dev), which bootstraps the cookie and opens upgrades.
+  CORS_CREDENTIALED_ORIGINS = 'https://termfleet-registry.chris-5ed.workers.dev,https://volter-gateway.fly.dev,https://minimal-claude-gateway.fly.dev'
 
 [http_service]
   internal_port = 8080
