@@ -17,7 +17,17 @@ const PORT = parseInt(process.env.PORT || '3500');
 const EXTERNAL_PORT = parseInt(process.env.EXTERNAL_PORT || process.env.PORT || '3500');
 const DOMAIN = process.env.TUNNEL_DOMAIN || 'localhost';
 const SECURE = process.env.TUNNEL_SECURE === 'true';
+// The shared secret every tunnel client must present to register. Without one there is no way to tell a client
+// from anyone on the internet, so registration is closed: an unset secret never turns into an open relay where any
+// caller claims, or with `replace` takes over, any tunnel id and receives its traffic.
 const TUNNEL_SECRET = process.env.TUNNEL_SECRET || '';
+
+/** Constant-time check of a presented tunnel secret (digests, so unequal lengths compare in constant time too). */
+function tunnelSecretMatches(presented) {
+  if (!TUNNEL_SECRET || typeof presented !== 'string' || !presented) return false;
+  const digest = (value) => crypto.createHash('sha256').update(value).digest();
+  return crypto.timingSafeEqual(digest(presented), digest(TUNNEL_SECRET));
+}
 const JWT_SECRET = process.env.JWT_SECRET || '';
 
 // This one process relays every tenant's tunnel, so a single uncaught error must
@@ -531,8 +541,8 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'error', message: 'This connection is already registered' }));
         return;
       }
-      // Reject if TUNNEL_SECRET is configured and client didn't provide a matching secret
-      if (TUNNEL_SECRET && msg.secret !== TUNNEL_SECRET) {
+      // Every registration presents the tunnel secret; with none configured, none is accepted (see TUNNEL_SECRET).
+      if (!tunnelSecretMatches(msg.secret)) {
         ws.send(JSON.stringify({ type: 'error', message: 'Invalid tunnel secret' }));
         ws.close(4003, 'Invalid tunnel secret');
         return;
@@ -822,4 +832,5 @@ server.on('error', (err) => {
 
 server.listen(PORT, () => {
   console.log(`ws-tunnel server on port ${PORT}, domain=${DOMAIN}, auth=${JWT_SECRET ? 'enabled' : 'disabled'}`);
+  if (!TUNNEL_SECRET) console.error('[tunnel] TUNNEL_SECRET is not set: every tunnel registration is refused until it is');
 });
