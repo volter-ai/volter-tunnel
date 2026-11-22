@@ -33,6 +33,18 @@ Run flags:
 | `--auth-not-required` | Leave the tunnel open. |
 | `--no-qr` | Suppress the QR code. |
 
+### Behind a proxy
+
+The connection to the relay honours the standard proxy environment, as curl reads
+it: `HTTPS_PROXY` (or `https_proxy`) for an `https://` relay, `HTTP_PROXY` (or
+`http_proxy`) for `http://`, and `NO_PROXY` (or `no_proxy`) to skip the proxy for
+listed hosts (`example.com` and `.example.com` both cover its subdomains, `*`
+covers every host). The client opens the WebSocket through an HTTP `CONNECT` to
+that proxy; credentials in the proxy URL are sent as `Proxy-Authorization` and
+never logged. The client adds no certificate handling of its own: the relay's
+certificate is checked against the runtime's trust store, which is where
+`NODE_EXTRA_CA_CERTS` applies. Traffic to your local port never uses the proxy.
+
 ## Authenticating
 
 ```bash
