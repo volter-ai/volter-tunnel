@@ -20,6 +20,14 @@ import type { TunnelLogger } from './types';
 export const http1Agent = new https.Agent({ ALPNProtocols: ['http/1.1'] });
 
 /**
+ * The agent for traffic to the exposed local port (HTTP requests and WebSocket upgrades). It is the client's own, not
+ * the global agent, because a runtime may route the global agent through the environment's proxy (Node with
+ * `--use-env-proxy` / NODE_USE_ENV_PROXY), and loopback traffic must never leave through a proxy. Its settings are
+ * those of Node's default global agent, so local requests behave as they did on it.
+ */
+export const localAgent = new http.Agent({ keepAlive: true, scheduling: 'lifo', timeout: 5000 });
+
+/**
  * The HTTP proxy the environment names for the relay's control socket.
  * - The proxy: `https_proxy`, else `HTTPS_PROXY`, for a wss:// relay; `http_proxy`, else `HTTP_PROXY`, for ws://.
  *   A value without a scheme is http://. Only an http(s) proxy can carry the CONNECT the socket needs, so another
@@ -40,15 +48,18 @@ export function relayProxy(relayUrl: string, env: NodeJS.ProcessEnv = process.en
 
   const host = target.hostname.replace(/^\[|\]$/g, '').toLowerCase();
   const port = target.port || (secure ? '443' : '80');
-  const bypass = (env.no_proxy || env.NO_PROXY || '').toLowerCase().split(/[\s,]+/).some((entry) => {
-    if (!entry) return false;
-    if (entry === '*') return true;
-    // `host:port`, `[v6]:port`, or a bare host (a bare IPv6 address has several colons and no port).
-    const m = /^\[([^\]]+)\](?::(\d+))?$/.exec(entry) ?? /^([^:]+):(\d+)$/.exec(entry);
-    if (m?.[2] && m[2] !== port) return false;
-    const domain = (m ? m[1] : entry).replace(/^\*?\./, '');
-    return host === domain || host.endsWith(`.${domain}`);
-  });
+  const bypass = (env.no_proxy || env.NO_PROXY || '')
+    .toLowerCase()
+    .split(/[\s,]+/)
+    .some((entry) => {
+      if (!entry) return false;
+      if (entry === '*') return true;
+      // `host:port`, `[v6]:port`, or a bare host (a bare IPv6 address has several colons and no port).
+      const m = /^\[([^\]]+)\](?::(\d+))?$/.exec(entry) ?? /^([^:]+):(\d+)$/.exec(entry);
+      if (m?.[2] && m[2] !== port) return false;
+      const domain = (m ? m[1] : entry).replace(/^\*?\./, '');
+      return host === domain || host.endsWith(`.${domain}`);
+    });
   if (bypass) return undefined;
 
   let proxy: URL;
@@ -300,7 +311,7 @@ export function handleWsUpgrade(
     delete headers[hopByHop];
   }
 
-  const localWs = new WebSocket(localWsUrl, protocols, { headers });
+  const localWs = new WebSocket(localWsUrl, protocols, { headers, agent: localAgent });
   // Known from the moment it is dialed: a relayed close or the tunnel's teardown reaches a socket still connecting.
   localWsConnections.set(msg.connId, localWs);
 
@@ -469,6 +480,7 @@ export function forwardRequest(
 
   const req = http.request(
     {
+      agent: localAgent,
       hostname: localAddr,
       port,
       path: msg.path,

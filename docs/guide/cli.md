@@ -53,10 +53,11 @@ the client's own log. **`DEBUG=https-proxy-agent` (or `DEBUG=*`) prints the
 proxy URL, credentials included.** The client adds no certificate handling of
 its own: the relay's certificate is checked against the runtime's trust store,
 which is where `NODE_EXTRA_CA_CERTS` applies. Traffic to your local port never
-uses the proxy.
+uses the proxy: it goes through the client's own agent, never the runtime's
+global one.
 
 Only the tunnel socket is opened this way. The account commands (`login`,
-`whoami`, `usage`, `reservations`, `tokens`, `account`) use the runtime's
+`whoami`, `usage`, `reservations`, `release`, `tokens`, `token`, `account`) use the runtime's
 `fetch` and its own proxy rules: under Node it ignores the proxy variables
 unless Node runs with `--use-env-proxy`.
 
