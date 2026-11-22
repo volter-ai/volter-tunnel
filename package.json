@@ -71,6 +71,7 @@
   },
   "dependencies": {
     "@volter/tunnel-core": "0.1.4",
+    "https-proxy-agent": "^9.1.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

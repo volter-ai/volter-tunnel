@@ -7,6 +7,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import WebSocket from 'ws';
 import type { CorrelationId, RequestMsg, WsUpgradeMsg } from '@volter/tunnel-core';
 import type { TunnelLogger } from './types';
@@ -17,6 +18,76 @@ import type { TunnelLogger } from './types';
  * so it's used conditionally; plain ws:// (e.g. a local relay) needs no agent.
  */
 export const http1Agent = new https.Agent({ ALPNProtocols: ['http/1.1'] });
+
+/**
+ * The agent for traffic to the exposed local port (HTTP requests and WebSocket upgrades). It is the client's own, not
+ * the global agent, because a runtime may route the global agent through the environment's proxy (Node with
+ * `--use-env-proxy` / NODE_USE_ENV_PROXY), and loopback traffic must never leave through a proxy. Its settings are
+ * those of Node's default global agent, so local requests behave as they did on it.
+ */
+export const localAgent = new http.Agent({ keepAlive: true, scheduling: 'lifo', timeout: 5000 });
+
+/**
+ * The HTTP proxy the environment names for the relay's control socket.
+ * - The proxy: `https_proxy`, else `HTTPS_PROXY`, for a wss:// relay; `http_proxy`, else `HTTP_PROXY`, for ws://.
+ *   A value without a scheme is http://. Only an http(s) proxy can carry the CONNECT the socket needs, so another
+ *   scheme is an error rather than a silent bypass.
+ * - The bypass list: `no_proxy`, else `NO_PROXY`; entries separated by commas or whitespace. An entry `*` anywhere in
+ *   the list bypasses every host. `name`, `.name` and `*.name` all match that host and its subdomains. A `:port`
+ *   suffix (`[v6]:port` for IPv6) limits the entry to that port. Addresses match literally; CIDR ranges are not read.
+ * This is not curl's reading: curl ignores upper-case `HTTP_PROXY`, treats `*` as bypass-all only as the whole
+ * value, and does not take `*.name` or `name:port`.
+ * Errors name the variable, never its value, which may carry credentials.
+ */
+export function relayProxy(relayUrl: string, env: NodeJS.ProcessEnv = process.env): URL | undefined {
+  const target = new URL(relayUrl);
+  const secure = target.protocol === 'wss:' || target.protocol === 'https:';
+  const name = secure ? 'HTTPS_PROXY' : 'HTTP_PROXY';
+  const raw = (env[name.toLowerCase()] || env[name] || '').trim();
+  if (!raw) return undefined;
+
+  const host = target.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  const port = target.port || (secure ? '443' : '80');
+  const bypass = (env.no_proxy || env.NO_PROXY || '')
+    .toLowerCase()
+    .split(/[\s,]+/)
+    .some((entry) => {
+      if (!entry) return false;
+      if (entry === '*') return true;
+      // `host:port`, `[v6]:port`, or a bare host (a bare IPv6 address has several colons and no port).
+      const m = /^\[([^\]]+)\](?::(\d+))?$/.exec(entry) ?? /^([^:]+):(\d+)$/.exec(entry);
+      if (m?.[2] && m[2] !== port) return false;
+      const domain = (m ? m[1] : entry).replace(/^\*?\./, '');
+      return host === domain || host.endsWith(`.${domain}`);
+    });
+  if (bypass) return undefined;
+
+  let proxy: URL;
+  try {
+    proxy = new URL(raw.includes('://') ? raw : `http://${raw}`);
+  } catch {
+    throw new Error(`${name} is not a valid proxy URL`);
+  }
+  if (proxy.protocol !== 'http:' && proxy.protocol !== 'https:') {
+    throw new Error(
+      `${name} names a ${proxy.protocol.slice(0, -1)} proxy; the tunnel client connects through http or https proxies only`
+    );
+  }
+  return proxy;
+}
+
+/**
+ * The `ws` options for the relay's control socket. With no proxy they are what they have always been: the HTTP/1.1
+ * agent for wss://, nothing for ws://. Through a proxy the agent is an HTTP CONNECT tunnel (the agent `ws` documents
+ * for proxies), which Node's `ws` uses as the request agent and Bun's `ws` hands to its native WebSocket proxy;
+ * Proxy-Authorization comes from the proxy URL's credentials. `via` is the proxy's origin, credentials removed, for
+ * the log.
+ */
+export function relaySocketOptions(relayUrl: string): { options: WebSocket.ClientOptions; via?: string } {
+  const proxy = relayProxy(relayUrl);
+  if (!proxy) return { options: relayUrl.startsWith('wss:') ? { agent: http1Agent } : {} };
+  return { options: { agent: new HttpsProxyAgent(proxy) }, via: proxy.origin };
+}
 
 // ============================================================================
 // Safe WebSocket close helpers
@@ -240,7 +311,7 @@ export function handleWsUpgrade(
     delete headers[hopByHop];
   }
 
-  const localWs = new WebSocket(localWsUrl, protocols, { headers });
+  const localWs = new WebSocket(localWsUrl, protocols, { headers, agent: localAgent });
   // Known from the moment it is dialed: a relayed close or the tunnel's teardown reaches a socket still connecting.
   localWsConnections.set(msg.connId, localWs);
 
@@ -409,6 +480,7 @@ export function forwardRequest(
 
   const req = http.request(
     {
+      agent: localAgent,
       hostname: localAddr,
       port,
       path: msg.path,

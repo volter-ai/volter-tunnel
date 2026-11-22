@@ -33,6 +33,34 @@ Run flags:
 | `--auth-not-required` | Leave the tunnel open. |
 | `--no-qr` | Suppress the QR code. |
 
+### Behind a proxy
+
+The tunnel's connection to the relay goes through an HTTP proxy when the
+environment names one:
+
+- **Proxy:** `https_proxy`, else `HTTPS_PROXY`, for an `https://` relay;
+  `http_proxy`, else `HTTP_PROXY`, for `http://`. A value without a scheme is
+  taken as `http://`; a proxy of another scheme (such as `socks5://`) is an error.
+- **Bypass:** `no_proxy`, else `NO_PROXY`, a list separated by commas or spaces.
+  `*` anywhere in the list bypasses every host. `example.com`, `.example.com`
+  and `*.example.com` each match `example.com` and its subdomains. A `:port`
+  suffix (`[::1]:port` for IPv6) limits an entry to that port. Addresses match
+  literally; CIDR ranges are not supported.
+
+The client opens the WebSocket with an HTTP `CONNECT` through the proxy.
+Credentials in the proxy URL are sent as `Proxy-Authorization` and are not in
+the client's own log. **`DEBUG=https-proxy-agent` (or `DEBUG=*`) prints the
+proxy URL, credentials included.** The client adds no certificate handling of
+its own: the relay's certificate is checked against the runtime's trust store,
+which is where `NODE_EXTRA_CA_CERTS` applies. Traffic to your local port never
+uses the proxy: it goes through the client's own agent, never the runtime's
+global one.
+
+Only the tunnel socket is opened this way. The account commands (`login`,
+`whoami`, `usage`, `reservations`, `release`, `tokens`, `token`, `account`) use the runtime's
+`fetch` and its own proxy rules: under Node it ignores the proxy variables
+unless Node runs with `--use-env-proxy`.
+
 ## Authenticating
 
 ```bash

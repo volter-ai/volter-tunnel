@@ -7,7 +7,7 @@
 import type http from 'node:http';
 import WebSocket from 'ws';
 import type { CorrelationId, RelayToClient } from '@volter/tunnel-core';
-import { forwardRequest, handleWsUpgrade, http1Agent, resolveLocalHost, safeClose, send502 } from './transport';
+import { forwardRequest, handleWsUpgrade, relaySocketOptions, resolveLocalHost, safeClose, send502 } from './transport';
 import type { TunnelHandle, TunnelLogger, TunnelOptions } from './types';
 
 export type { TunnelHandle, TunnelLogger, TunnelOptions } from './types';
@@ -45,6 +45,14 @@ export function createTunnel({
   // the query param and reads tunnelId from `register`, so one client works
   // against both servers.
   const wsUrl = `${host.replace(/^http/, 'ws')}/ws` + (tunnelId ? `?id=${encodeURIComponent(tunnelId)}` : '');
+  // The control socket's options, from the standard proxy environment (HTTPS_PROXY, HTTP_PROXY, NO_PROXY): read once,
+  // as the environment does not change under a running client.
+  let relaySocket: ReturnType<typeof relaySocketOptions>;
+  try {
+    relaySocket = relaySocketOptions(wsUrl);
+  } catch (err) {
+    return Promise.reject(err);
+  }
 
   // Resolved loopback address for this port (set before first connection)
   let localHost = '127.0.0.1';
@@ -93,7 +101,7 @@ export function createTunnel({
   function connect(onRegistered: (handle: TunnelHandle) => void, onFirstError: ((err: Error) => void) | null): void {
     if (closed) return;
 
-    const ws = new WebSocket(wsUrl, wsUrl.startsWith('wss:') ? { agent: http1Agent } : {});
+    const ws = new WebSocket(wsUrl, { ...relaySocket.options });
     // This attempt's stages, for a timeout to say where it stood: the socket (DNS, TCP, TLS, upgrade) not yet open, or
     // open with the register sent and no 'registered' back.
     const attemptAt = Date.now();
@@ -410,6 +418,12 @@ export function createTunnel({
     // Resolve which loopback address works before connecting
     resolveLocalHost(port).then((addr) => {
       localHost = addr;
+      if (relaySocket.via) {
+        log.info(
+          { component: 'tunnel_client', action: 'relay_proxy', proxy: relaySocket.via },
+          `Connecting to the relay through the proxy ${relaySocket.via}`
+        );
+      }
       if (addr !== '127.0.0.1') {
         log.info(
           { component: 'tunnel_client', action: 'resolved_local_host', port, address: addr },
