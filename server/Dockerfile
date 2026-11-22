@@ -1,4 +1,4 @@
-FROM node:22-slim
+FROM node:22.23.1-slim
 
 WORKDIR /app
 # The lockfile pins every dependency; `npm ci` installs exactly it, so a deploy runs what was reviewed.

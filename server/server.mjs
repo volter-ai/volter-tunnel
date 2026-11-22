@@ -236,25 +236,35 @@ function stripTokenParam(urlPath) {
   }
 }
 
-/** Set CORS headers on a tunneled response. All tunnel traffic is cross-origin.
+// Origins (exact, comma-separated) the relay grants credentialed CORS to: the operator's own consoles that call
+// tunnels with the __volter_auth cookie. Every other origin gets the credential-free grant.
+const CORS_CREDENTIALED_ORIGINS = new Set(
+  (process.env.CORS_CREDENTIALED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean)
+);
+
+/** Set the relay's CORS grant on a tunneled response. All tunnel traffic is cross-origin.
  *
- * The tunnel answers preflight itself (OPTIONS never reaches the origin app),
- * so the allow-headers grant must cover whatever custom headers the tunneled
- * app's clients send — which this server cannot know in advance. Reflect the
- * browser's Access-Control-Request-Headers verbatim: it lists exactly the
- * headers the real request will carry, and a `*` wildcard is not an option
- * because allow-credentials is true (the spec ignores `*` there). The fixed
- * list remains as the fallback for non-preflight responses, which carry no
- * request-headers hint. (First real casualty of the fixed list: PeakHealth
- * EMR multi-tenant surfaces send X-Active-Tenant-Id — every preflight failed.) */
+ * The relay owns the policy: the tunnel client rewrites a visitor's Origin to the app's own localhost origin before
+ * forwarding, so a tunneled app never sees who is calling and its own CORS headers (stripped from its responses)
+ * could only name localhost. The tunnel answers preflight itself (OPTIONS never reaches the origin app).
+ *
+ * Any origin may read a tunnel credential-free: `Access-Control-Allow-Origin: *`, which browsers never pair with
+ * cookies, so no website can read a tunnel with a visitor's SameSite=None __volter_auth cookie. Only an origin in
+ * CORS_CREDENTIALED_ORIGINS is reflected with credentials. The preflight's Access-Control-Request-Headers are
+ * reflected because the relay cannot know the app's clients' custom headers in advance (PeakHealth EMR's
+ * multi-tenant surfaces send X-Active-Tenant-Id with a bearer Authorization header and no cookies; the fixed list
+ * failed every such preflight). The fixed list remains for non-preflight responses, which carry no hint. */
 function setCorsHeaders(req, res) {
   const origin = req.headers.origin;
-  if (origin) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    const requested = req.headers['access-control-request-headers'];
-    res.setHeader('Access-Control-Allow-Headers', requested || 'Content-Type, Authorization, X-Sandbox-Id');
+  if (!origin) return;
+  const credentialed = CORS_CREDENTIALED_ORIGINS.has(origin);
+  res.setHeader('Access-Control-Allow-Origin', credentialed ? origin : '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  const requested = req.headers['access-control-request-headers'];
+  res.setHeader('Access-Control-Allow-Headers', requested || 'Content-Type, Authorization, X-Sandbox-Id');
+  if (credentialed) {
     res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
   }
 }
 
