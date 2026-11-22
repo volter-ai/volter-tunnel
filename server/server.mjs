@@ -143,28 +143,30 @@ function verifyForTunnel(token, tunnelId) {
  * 2. ?token= query parameter
  * 3. __volter_auth cookie
  *
- * Each token must be bound to `tunnelId` (verifyForTunnel).
+ * The first token bound to `tunnelId` (verifyForTunnel) authenticates; one bound elsewhere, or to nothing, does not.
  * Returns { payload, token, source } or null.
  * `source` is 'header' | 'query' | 'cookie' — used to decide whether to bootstrap a cookie.
  */
 function validateAuth(req, tunnelId) {
   if (!JWT_SECRET) return null;
 
-  // 1. Bearer token
+  // 1. Bearer token. An Authorization header can be the app's own credential (it is forwarded to the app), so one
+  // not bound to this tunnel is not a refusal: the next source is tried.
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.slice(7);
     const payload = verifyForTunnel(token, tunnelId);
-    return payload ? { payload, token, source: 'header' } : null;
+    if (payload) return { payload, token, source: 'header' };
   }
 
-  // 2. ?__volter_token= query param (used by iframes that can't set headers)
+  // 2. ?__volter_token= query param (used by iframes that can't set headers, and by a caller whose Authorization
+  // belongs to the app)
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const queryToken = url.searchParams.get('__volter_token');
     if (queryToken) {
       const payload = verifyForTunnel(queryToken, tunnelId);
-      return payload ? { payload, token: queryToken, source: 'query' } : null;
+      if (payload) return { payload, token: queryToken, source: 'query' };
     }
   } catch {
     // URL parse failed — fall through to cookie
@@ -243,7 +245,7 @@ function validateWsAuth(req, tunnelId) {
     const token = url.searchParams.get('__volter_token');
     if (token) {
       const payload = verifyForTunnel(token, tunnelId);
-      return payload ? { payload, source: 'query' } : null;
+      if (payload) return { payload, source: 'query' };
     }
   } catch {
     // URL parse failed — fall through to cookie
