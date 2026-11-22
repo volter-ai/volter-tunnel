@@ -180,6 +180,36 @@ function validateAuth(req, tunnelId) {
 }
 
 /**
+ * An app's Set-Cookie headers as the relay passes them: every tunnel shares the parent domain, and registration is
+ * open, so a cookie an app scopes to it (Domain=<DOMAIN> or any parent of it) would reach, and could shadow, every
+ * other tunnel's cookies. Such a Domain attribute is removed, which leaves the cookie host-only on the app's own
+ * tunnel. A cookie named __volter_auth is dropped: that name is the relay's. The relay's own bootstrap cookie is
+ * appended after them.
+ */
+function appSetCookies(value, bootstrapCookie) {
+  const list = value === undefined ? [] : Array.isArray(value) ? value : [value];
+  const shared = DOMAIN.toLowerCase();
+  const out = [];
+  for (const cookie of list) {
+    const parts = String(cookie).split(';');
+    if (parts[0].slice(0, parts[0].indexOf('=')).trim() === '__volter_auth') continue;
+    out.push(
+      parts
+        .filter((part, i) => {
+          if (i === 0) return true;
+          const [name, ...rest] = part.split('=');
+          if (name.trim().toLowerCase() !== 'domain') return true;
+          const domain = rest.join('=').trim().toLowerCase().replace(/^\./, '');
+          return !(domain === shared || shared.endsWith(`.${domain}`));
+        })
+        .join(';')
+    );
+  }
+  if (bootstrapCookie) out.push(bootstrapCookie);
+  return out;
+}
+
+/**
  * Strip the __volter_auth cookie from request headers before forwarding to
  * tunnel clients. Prevents downstream services from seeing auth credentials.
  */
@@ -418,10 +448,11 @@ const server = http.createServer((req, res) => {
     }
     // When auth came from ?token= query param (iframe initial load),
     // bootstrap a cookie so subsequent requests auth via cookie automatically.
+    // Host-only (no Domain): the token is bound to this tunnel, so its cookie belongs to this tunnel's host alone and
+    // never overwrites another tunnel's.
     if (auth.source === 'query') {
-      const cookieDomain = '.' + DOMAIN;
       const maxAge = 3600; // 1 hour
-      bootstrapCookie = `__volter_auth=${auth.token}; Domain=${cookieDomain}; HttpOnly; SameSite=None; Secure; Path=/; Max-Age=${maxAge}`;
+      bootstrapCookie = `__volter_auth=${auth.token}; HttpOnly; SameSite=None; Secure; Path=/; Max-Age=${maxAge}`;
     }
   }
 
@@ -651,10 +682,10 @@ wss.on('connection', (ws) => {
       delete headers['access-control-allow-credentials'];
       stripFrameAncestors(headers);
 
-      // Bootstrap cookie on first request (when auth came from ?token= query param)
-      if (pending.bootstrapCookie) {
-        headers['set-cookie'] = pending.bootstrapCookie;
-      }
+      // The app's cookies kept to its own host, then the bootstrap cookie (when auth came from ?token= query param)
+      const setCookies = appSetCookies(headers['set-cookie'], pending.bootstrapCookie);
+      if (setCookies.length) headers['set-cookie'] = setCookies;
+      else delete headers['set-cookie'];
 
       mergeVary(res, headers);
       res.writeHead(msg.status || 200, headers);
@@ -686,10 +717,10 @@ wss.on('connection', (ws) => {
       delete headers['access-control-allow-credentials'];
       stripFrameAncestors(headers);
 
-      // Bootstrap cookie on first request (when auth came from ?token= query param)
-      if (pending.bootstrapCookie) {
-        headers['set-cookie'] = pending.bootstrapCookie;
-      }
+      // The app's cookies kept to its own host, then the bootstrap cookie (when auth came from ?token= query param)
+      const setCookies = appSetCookies(headers['set-cookie'], pending.bootstrapCookie);
+      if (setCookies.length) headers['set-cookie'] = setCookies;
+      else delete headers['set-cookie'];
 
       mergeVary(res, headers);
       res.writeHead(msg.status || 200, headers);
