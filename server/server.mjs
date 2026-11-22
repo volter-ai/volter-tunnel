@@ -112,56 +112,103 @@ function parseCookies(cookieHeader) {
   return cookies;
 }
 
+/** Every value of one cookie name in a Cookie header, in the browser's order. A tunnel host can receive two
+ *  __volter_auth cookies (its own host-only one and the apex endpoint's parent-domain one); a Map keeps only one. */
+function cookieValues(cookieHeader, name) {
+  if (!cookieHeader) return [];
+  return cookieHeader
+    .split(';')
+    .map((pair) => pair.trim())
+    .filter((pair) => pair.slice(0, pair.indexOf('=')).trim() === name)
+    .map((pair) => pair.slice(pair.indexOf('=') + 1).trim());
+}
+
+/**
+ * A data-plane token's payload when it is signed with JWT_SECRET and bound to this tunnel, else null. The binding is
+ * the token's `tid` claim, the claim minimal-claude's gateway puts on its per-tunnel tokens (POST /api/tunnel/token)
+ * and server-cf checks: a token without one, or for another tunnel, opens nothing here.
+ */
+function verifyForTunnel(token, tunnelId) {
+  try {
+    const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+    return payload && typeof payload === 'object' && payload.tid === tunnelId ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Validate auth from a request. Checks (in order):
  * 1. Authorization: Bearer <jwt> header
  * 2. ?token= query parameter
  * 3. __volter_auth cookie
  *
+ * The first token bound to `tunnelId` (verifyForTunnel) authenticates; one bound elsewhere, or to nothing, does not.
  * Returns { payload, token, source } or null.
  * `source` is 'header' | 'query' | 'cookie' — used to decide whether to bootstrap a cookie.
  */
-function validateAuth(req) {
+function validateAuth(req, tunnelId) {
   if (!JWT_SECRET) return null;
 
-  // 1. Bearer token
+  // 1. Bearer token. An Authorization header can be the app's own credential (it is forwarded to the app), so one
+  // not bound to this tunnel is not a refusal: the next source is tried.
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.slice(7);
-    try {
-      return { payload: jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }), token, source: 'header' };
-    } catch {
-      return null;
-    }
+    const payload = verifyForTunnel(token, tunnelId);
+    if (payload) return { payload, token, source: 'header' };
   }
 
-  // 2. ?__volter_token= query param (used by iframes that can't set headers)
+  // 2. ?__volter_token= query param (used by iframes that can't set headers, and by a caller whose Authorization
+  // belongs to the app)
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const queryToken = url.searchParams.get('__volter_token');
     if (queryToken) {
-      try {
-        return { payload: jwt.verify(queryToken, JWT_SECRET, { algorithms: ['HS256'] }), token: queryToken, source: 'query' };
-      } catch {
-        return null;
-      }
+      const payload = verifyForTunnel(queryToken, tunnelId);
+      if (payload) return { payload, token: queryToken, source: 'query' };
     }
   } catch {
     // URL parse failed — fall through to cookie
   }
 
-  // 3. Cookie
-  const cookies = parseCookies(req.headers.cookie);
-  const cookieToken = cookies.get('__volter_auth');
-  if (cookieToken) {
-    try {
-      return { payload: jwt.verify(cookieToken, JWT_SECRET, { algorithms: ['HS256'] }), token: cookieToken, source: 'cookie' };
-    } catch {
-      return null;
-    }
+  // 3. Cookie: the first __volter_auth bound to this tunnel
+  for (const cookieToken of cookieValues(req.headers.cookie, '__volter_auth')) {
+    const payload = verifyForTunnel(cookieToken, tunnelId);
+    if (payload) return { payload, token: cookieToken, source: 'cookie' };
   }
 
   return null;
+}
+
+/**
+ * An app's Set-Cookie headers as the relay passes them: every tunnel shares the parent domain, and registration is
+ * open, so a cookie an app scopes to it (Domain=<DOMAIN> or any parent of it) would reach, and could shadow, every
+ * other tunnel's cookies. Such a Domain attribute is removed, which leaves the cookie host-only on the app's own
+ * tunnel. A cookie named __volter_auth is dropped: that name is the relay's. The relay's own bootstrap cookie is
+ * appended after them.
+ */
+function appSetCookies(value, bootstrapCookie) {
+  const list = value === undefined ? [] : Array.isArray(value) ? value : [value];
+  const shared = DOMAIN.toLowerCase();
+  const out = [];
+  for (const cookie of list) {
+    const parts = String(cookie).split(';');
+    if (parts[0].slice(0, parts[0].indexOf('=')).trim() === '__volter_auth') continue;
+    out.push(
+      parts
+        .filter((part, i) => {
+          if (i === 0) return true;
+          const [name, ...rest] = part.split('=');
+          if (name.trim().toLowerCase() !== 'domain') return true;
+          const domain = rest.join('=').trim().toLowerCase().replace(/^\./, '');
+          return !(domain === shared || shared.endsWith(`.${domain}`));
+        })
+        .join(';')
+    );
+  }
+  if (bootstrapCookie) out.push(bootstrapCookie);
+  return out;
 }
 
 /**
@@ -189,7 +236,7 @@ function stripAuthCookie(headers) {
  * Checks ?__volter_token=<jwt> query parameter (browsers can't set headers on WS upgrades).
  * Falls back to cookie. Returns the payload and where the token came from (`query` or `cookie`).
  */
-function validateWsAuth(req) {
+function validateWsAuth(req, tunnelId) {
   if (!JWT_SECRET) return null;
 
   // 1. ?__volter_token= query param
@@ -197,25 +244,17 @@ function validateWsAuth(req) {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const token = url.searchParams.get('__volter_token');
     if (token) {
-      try {
-        return { payload: jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }), source: 'query' };
-      } catch {
-        return null;
-      }
+      const payload = verifyForTunnel(token, tunnelId);
+      if (payload) return { payload, source: 'query' };
     }
   } catch {
     // URL parse failed — fall through to cookie
   }
 
-  // 2. Cookie
-  const cookies = parseCookies(req.headers.cookie);
-  const cookieToken = cookies.get('__volter_auth');
-  if (cookieToken) {
-    try {
-      return { payload: jwt.verify(cookieToken, JWT_SECRET, { algorithms: ['HS256'] }), source: 'cookie' };
-    } catch {
-      return null;
-    }
+  // 2. Cookie: the first __volter_auth bound to this tunnel
+  for (const cookieToken of cookieValues(req.headers.cookie, '__volter_auth')) {
+    const payload = verifyForTunnel(cookieToken, tunnelId);
+    if (payload) return { payload, source: 'cookie' };
   }
 
   return null;
@@ -404,17 +443,18 @@ const server = http.createServer((req, res) => {
   // Auth check for auth-required tunnels
   let bootstrapCookie = null;
   if (client.authRequired && JWT_SECRET) {
-    const auth = validateAuth(req);
+    const auth = validateAuth(req, tunnelId);
     if (!auth) {
       send401(res);
       return;
     }
     // When auth came from ?token= query param (iframe initial load),
     // bootstrap a cookie so subsequent requests auth via cookie automatically.
+    // Host-only (no Domain): the token is bound to this tunnel, so its cookie belongs to this tunnel's host alone and
+    // never overwrites another tunnel's.
     if (auth.source === 'query') {
-      const cookieDomain = '.' + DOMAIN;
       const maxAge = 3600; // 1 hour
-      bootstrapCookie = `__volter_auth=${auth.token}; Domain=${cookieDomain}; HttpOnly; SameSite=None; Secure; Path=/; Max-Age=${maxAge}`;
+      bootstrapCookie = `__volter_auth=${auth.token}; HttpOnly; SameSite=None; Secure; Path=/; Max-Age=${maxAge}`;
     }
   }
 
@@ -488,7 +528,7 @@ server.on('upgrade', (req, socket, head) => {
 
     // Auth check for auth-required tunnels (WS uses ?token= query param or cookie)
     if (client.authRequired && JWT_SECRET) {
-      const auth = validateWsAuth(req);
+      const auth = validateWsAuth(req, tunnelId);
       if (!auth) {
         console.log(`[ws-relay] auth failed for tunnel ${tunnelId}, rejecting upgrade`);
         socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
@@ -644,10 +684,10 @@ wss.on('connection', (ws) => {
       delete headers['access-control-allow-credentials'];
       stripFrameAncestors(headers);
 
-      // Bootstrap cookie on first request (when auth came from ?token= query param)
-      if (pending.bootstrapCookie) {
-        headers['set-cookie'] = pending.bootstrapCookie;
-      }
+      // The app's cookies kept to its own host, then the bootstrap cookie (when auth came from ?token= query param)
+      const setCookies = appSetCookies(headers['set-cookie'], pending.bootstrapCookie);
+      if (setCookies.length) headers['set-cookie'] = setCookies;
+      else delete headers['set-cookie'];
 
       mergeVary(res, headers);
       res.writeHead(msg.status || 200, headers);
@@ -679,10 +719,10 @@ wss.on('connection', (ws) => {
       delete headers['access-control-allow-credentials'];
       stripFrameAncestors(headers);
 
-      // Bootstrap cookie on first request (when auth came from ?token= query param)
-      if (pending.bootstrapCookie) {
-        headers['set-cookie'] = pending.bootstrapCookie;
-      }
+      // The app's cookies kept to its own host, then the bootstrap cookie (when auth came from ?token= query param)
+      const setCookies = appSetCookies(headers['set-cookie'], pending.bootstrapCookie);
+      if (setCookies.length) headers['set-cookie'] = setCookies;
+      else delete headers['set-cookie'];
 
       mergeVary(res, headers);
       res.writeHead(msg.status || 200, headers);
