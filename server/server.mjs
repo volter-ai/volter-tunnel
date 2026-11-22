@@ -187,7 +187,7 @@ function stripAuthCookie(headers) {
 /**
  * Validate auth from a WebSocket upgrade request.
  * Checks ?__volter_token=<jwt> query parameter (browsers can't set headers on WS upgrades).
- * Falls back to cookie.
+ * Falls back to cookie. Returns the payload and where the token came from (`query` or `cookie`).
  */
 function validateWsAuth(req) {
   if (!JWT_SECRET) return null;
@@ -198,7 +198,7 @@ function validateWsAuth(req) {
     const token = url.searchParams.get('__volter_token');
     if (token) {
       try {
-        return jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+        return { payload: jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }), source: 'query' };
       } catch {
         return null;
       }
@@ -212,13 +212,23 @@ function validateWsAuth(req) {
   const cookieToken = cookies.get('__volter_auth');
   if (cookieToken) {
     try {
-      return jwt.verify(cookieToken, JWT_SECRET, { algorithms: ['HS256'] });
+      return { payload: jwt.verify(cookieToken, JWT_SECRET, { algorithms: ['HS256'] }), source: 'cookie' };
     } catch {
       return null;
     }
   }
 
   return null;
+}
+
+/** The public origin of a tunnel, as its registration reports it. */
+function tunnelOrigin(tunnelId) {
+  const scheme = SECURE ? 'https' : 'http';
+  const portSuffix =
+    (!SECURE && EXTERNAL_PORT !== 80) || (SECURE && EXTERNAL_PORT !== 443)
+      ? `:${EXTERNAL_PORT}`
+      : '';
+  return `${scheme}://${tunnelId}.${DOMAIN}${portSuffix}`;
 }
 
 /**
@@ -262,10 +272,22 @@ function setCorsHeaders(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   const requested = req.headers['access-control-request-headers'];
   res.setHeader('Access-Control-Allow-Headers', requested || 'Content-Type, Authorization, X-Sandbox-Id');
-  if (credentialed) {
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Vary', 'Origin');
-  }
+  if (credentialed) res.setHeader('Access-Control-Allow-Credentials', 'true');
+  // The grant depends on the Origin (credentialed or not), so a cache must key on it.
+  res.setHeader('Vary', 'Origin');
+}
+
+/** Merge the relay's Vary (set by setCorsHeaders) into an app's response headers, which writeHead would otherwise let
+ *  replace it: the union of both lists, or `*` when the app varies on everything. */
+function mergeVary(res, headers) {
+  const relay = res.getHeader('vary');
+  const key = Object.keys(headers).find((name) => name.toLowerCase() === 'vary');
+  if (!relay || !key) return;
+  const app = String(headers[key]);
+  if (app.trim() === '*') return;
+  const names = [...app.split(','), ...String(relay).split(',')].map((n) => n.trim()).filter(Boolean);
+  const seen = new Set();
+  headers[key] = names.filter((n) => !seen.has(n.toLowerCase()) && seen.add(n.toLowerCase())).join(', ');
 }
 
 /**
@@ -466,10 +488,27 @@ server.on('upgrade', (req, socket, head) => {
 
     // Auth check for auth-required tunnels (WS uses ?token= query param or cookie)
     if (client.authRequired && JWT_SECRET) {
-      const payload = validateWsAuth(req);
-      if (!payload) {
+      const auth = validateWsAuth(req);
+      if (!auth) {
         console.log(`[ws-relay] auth failed for tunnel ${tunnelId}, rejecting upgrade`);
         socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      // A browser sends the SameSite=None cookie on a cross-site upgrade too, and CORS does not apply to WebSockets,
+      // so a cookie authenticates a browser's upgrade only from the tunnel's own origin or a credentialed origin. A
+      // browser always names its Origin on an upgrade; a client that names none is not a browser, and a cookie it
+      // sends is its own, not one a site borrowed. A token on the URL was handed to the page on purpose and stays
+      // accepted from anywhere.
+      const origin = req.headers.origin;
+      if (
+        auth.source === 'cookie' &&
+        origin !== undefined &&
+        origin !== tunnelOrigin(tunnelId) &&
+        !CORS_CREDENTIALED_ORIGINS.has(origin)
+      ) {
+        console.log(`[ws-relay] cookie-authenticated upgrade from a foreign origin for tunnel ${tunnelId}, refused`);
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
         socket.destroy();
         return;
       }
@@ -579,12 +618,7 @@ wss.on('connection', (ws) => {
       const authRequired = msg.authRequired !== false;
       clients.set(tunnelId, { ws, authRequired });
 
-      const scheme = SECURE ? 'https' : 'http';
-      const portSuffix =
-        (!SECURE && EXTERNAL_PORT !== 80) || (SECURE && EXTERNAL_PORT !== 443)
-          ? `:${EXTERNAL_PORT}`
-          : '';
-      const url = `${scheme}://${tunnelId}.${DOMAIN}${portSuffix}`;
+      const url = tunnelOrigin(tunnelId);
 
       ws.send(JSON.stringify({ type: 'registered', tunnelId, url }));
       console.log(`[tunnel] registered: ${tunnelId} (${clients.size} active, auth=${authRequired})`);
@@ -615,6 +649,7 @@ wss.on('connection', (ws) => {
         headers['set-cookie'] = pending.bootstrapCookie;
       }
 
+      mergeVary(res, headers);
       res.writeHead(msg.status || 200, headers);
       if (msg.body) {
         res.end(Buffer.from(msg.body, 'base64'));
@@ -649,6 +684,7 @@ wss.on('connection', (ws) => {
         headers['set-cookie'] = pending.bootstrapCookie;
       }
 
+      mergeVary(res, headers);
       res.writeHead(msg.status || 200, headers);
 
       streamingResponses.set(msg.reqId, { res, tunnelId, ctl: ws });
