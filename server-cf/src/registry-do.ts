@@ -32,6 +32,7 @@ import {
   type MeteringEnv,
   type TokenRecord,
   burstStep,
+  defaultReservedMax,
   envNum,
 } from './metering-types';
 
@@ -185,7 +186,7 @@ export class RegistryDO extends DurableObject<MeteringEnv> {
       monthLimit: e.monthLimit,
       concurrentMax: e.concurrentMax,
       leaseChunk: e.leaseChunk,
-      reservedMax: e.reservedMax ?? envNum(this.env.DEFAULT_RESERVED_MAX, 3),
+      reservedMax: e.reservedMax ?? defaultReservedMax(this.env, slug),
     };
   }
 

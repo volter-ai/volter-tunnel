@@ -146,6 +146,20 @@ export function envNum(v: string | undefined, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/**
+ * An account's reserved-id cap when its record names none. The built-in internal account (the legacy TUNNEL_SECRET
+ * maps to it) is effectively unlimited, as its bootstrap provisions it; every other account gets the free default.
+ * A record that predates the cap (the internal account's registry entry is one) must not fall to the free default.
+ */
+export function defaultReservedMax(
+  env: { INTERNAL_ACCOUNT?: string; INTERNAL_RESERVED_MAX?: string; DEFAULT_RESERVED_MAX?: string },
+  slug: string
+): number {
+  return slug === (env.INTERNAL_ACCOUNT || 'volter-internal')
+    ? envNum(env.INTERNAL_RESERVED_MAX, 1_000_000)
+    : envNum(env.DEFAULT_RESERVED_MAX, 3);
+}
+
 /** Persistent per-tunnelId ownership record (lives in the TunnelDO's storage).
  *  There is exactly one per tunnelId, so it is globally consistent by
  *  construction — no central index needed. */

@@ -24,7 +24,7 @@ import type {
   RateSnapshot,
   UsageView,
 } from './metering-types';
-import { envNum } from './metering-types';
+import { defaultReservedMax, envNum } from './metering-types';
 
 interface Usage {
   day: string;
@@ -289,7 +289,7 @@ export class AccountDO extends DurableObject<MeteringEnv> {
     // Reserved-id count cap (#3): a NEW reserved id must fit under reservedMax.
     // Refreshing an id the account already holds is free; the internal account's
     // very large reservedMax makes it effectively unlimited.
-    const reservedMax = this.config.reservedMax ?? envNum(this.env.DEFAULT_RESERVED_MAX, 3);
+    const reservedMax = this.config.reservedMax ?? defaultReservedMax(this.env, this.config.slug);
     if (reservedMax > 0 && !this.reserved.has(tunnelId) && this.reserved.size >= reservedMax) {
       return {
         ok: false,
@@ -432,7 +432,7 @@ export class AccountDO extends DurableObject<MeteringEnv> {
       openTunnels: this.open.size,
       concurrentMax: c?.concurrentMax ?? 0,
       reservedTunnels: [...this.reserved].sort(),
-      reservedMax: c?.reservedMax ?? envNum(this.env.DEFAULT_RESERVED_MAX, 3),
+      reservedMax: c?.reservedMax ?? defaultReservedMax(this.env, c?.slug ?? ''),
       raw: { ...this.usage.raw },
       resetAt: { day: this.usage.day, month: this.usage.month },
       usd: {
