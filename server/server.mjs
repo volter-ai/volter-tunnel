@@ -393,7 +393,8 @@ const server = http.createServer((req, res) => {
       }
     }, 30000);
 
-    pendingRequests.set(reqId, { res, timer, tunnelId, bootstrapCookie });
+    // Bound to the control socket the request is sent on: only that socket may answer it (see the message handler).
+    pendingRequests.set(reqId, { res, timer, tunnelId, bootstrapCookie, ctl: client.ws });
 
     client.ws.send(
       JSON.stringify({
@@ -476,7 +477,7 @@ server.on('upgrade', (req, socket, head) => {
         browserWs.close(1001, 'Tunnel timeout');
       }, 15000);
 
-      pendingUpgrades.set(connId, { browserWs, timer, tunnelId });
+      pendingUpgrades.set(connId, { browserWs, timer, tunnelId, ctl: client.ws });
 
       // Ask tunnel client to connect to its local WebSocket
       client.ws.send(
@@ -506,7 +507,10 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 wss.on('connection', (ws) => {
+  // The id this socket registered, set once. The socket speaks for it only while it is that id's current client: a
+  // replaced socket keeps its id here but owns nothing.
   let tunnelId = null;
+  const owns = () => tunnelId !== null && clients.get(tunnelId)?.ws === ws;
 
   ws.on('message', (data) => {
     let msg;
@@ -516,7 +520,17 @@ wss.on('connection', (ws) => {
       return;
     }
 
+    // Before registering, a socket may only register; after, only the id's current client is heard. Every entry a
+    // message names (a pending request, a stream, an upgrade, a relayed WebSocket) must also belong to this socket, so
+    // no socket can answer, or take over, another tunnel's traffic by guessing its counter.
+    if (msg.type !== 'register' && !owns()) return;
+
     if (msg.type === 'register') {
+      // One registration per socket: a second register is refused rather than leaving the first id bound to it.
+      if (tunnelId !== null) {
+        ws.send(JSON.stringify({ type: 'error', message: 'This connection is already registered' }));
+        return;
+      }
       // Reject if TUNNEL_SECRET is configured and client didn't provide a matching secret
       if (TUNNEL_SECRET && msg.secret !== TUNNEL_SECRET) {
         ws.send(JSON.stringify({ type: 'error', message: 'Invalid tunnel secret' }));
@@ -557,7 +571,7 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'response') {
       const pending = pendingRequests.get(msg.reqId);
-      if (!pending) return;
+      if (!pending || pending.ctl !== ws) return;
 
       clearTimeout(pending.timer);
       pendingRequests.delete(msg.reqId);
@@ -592,7 +606,7 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'response-start') {
       const pending = pendingRequests.get(msg.reqId);
-      if (!pending) return;
+      if (!pending || pending.ctl !== ws) return;
       clearTimeout(pending.timer);
       pendingRequests.delete(msg.reqId);
 
@@ -616,7 +630,7 @@ wss.on('connection', (ws) => {
 
       res.writeHead(msg.status || 200, headers);
 
-      streamingResponses.set(msg.reqId, { res, tunnelId });
+      streamingResponses.set(msg.reqId, { res, tunnelId, ctl: ws });
 
       // If browser disconnects, tell tunnel client to abort
       res.on('close', () => {
@@ -631,14 +645,14 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'response-chunk') {
       const streaming = streamingResponses.get(msg.reqId);
-      if (streaming) {
+      if (streaming && streaming.ctl === ws) {
         streaming.res.write(Buffer.from(msg.data, 'base64'));
       }
     }
 
     if (msg.type === 'response-end') {
       const streaming = streamingResponses.get(msg.reqId);
-      if (streaming) {
+      if (streaming && streaming.ctl === ws) {
         streamingResponses.delete(msg.reqId);
         streaming.res.end();
       }
@@ -648,8 +662,8 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'ws-ready') {
       const pending = pendingUpgrades.get(msg.connId);
-      if (!pending) {
-        console.log(`[ws-relay] WARNING: no pending upgrade for connId=${msg.connId}`);
+      if (!pending || pending.ctl !== ws) {
+        console.log(`[ws-relay] WARNING: no pending upgrade for connId=${msg.connId} on this tunnel`);
         return;
       }
 
@@ -721,7 +735,7 @@ wss.on('connection', (ws) => {
     if (msg.type === 'ws-error') {
       console.log(`[ws-relay] received ws-error for connId=${msg.connId}: ${msg.error}`);
       const pending = pendingUpgrades.get(msg.connId);
-      if (pending) {
+      if (pending && pending.ctl === ws) {
         clearTimeout(pending.timer);
         pendingUpgrades.delete(msg.connId);
         closeWsSafely(pending.browserWs, 1001, msg.error || 'Tunnel error');
@@ -731,7 +745,7 @@ wss.on('connection', (ws) => {
     // Relay: tunnel client → browser
     if (msg.type === 'ws-message') {
       const conn = wsConnections.get(msg.connId);
-      if (conn && conn.browserWs.readyState === 1) {
+      if (conn && conn.clientWs === ws && conn.browserWs.readyState === 1) {
         const buf = Buffer.from(msg.data, 'base64');
         conn.browserWs.send(buf, { binary: msg.binary });
       }
@@ -739,7 +753,7 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'ws-close') {
       const conn = wsConnections.get(msg.connId);
-      if (conn) {
+      if (conn && conn.clientWs === ws) {
         const code =
           msg.code >= 1000 && msg.code <= 4999 && msg.code !== 1005 && msg.code !== 1006
             ? msg.code
@@ -750,13 +764,15 @@ wss.on('connection', (ws) => {
     }
   });
 
+  // A socket's end retires only what is its own: the id's binding while it still holds it, and the traffic sent on it.
+  // A replaced socket's late close leaves its successor's binding and traffic alone.
   ws.on('close', () => {
     if (tunnelId) {
-      clients.delete(tunnelId);
+      if (owns()) clients.delete(tunnelId);
 
       // Close all proxied WebSocket connections for this tunnel client
       for (const [connId, conn] of wsConnections) {
-        if (conn.tunnelId === tunnelId) {
+        if (conn.clientWs === ws) {
           conn.browserWs.close(1001, 'Tunnel disconnected');
           wsConnections.delete(connId);
         }
@@ -764,7 +780,7 @@ wss.on('connection', (ws) => {
 
       // End any active streaming responses for this tunnel
       for (const [reqId, streaming] of streamingResponses) {
-        if (streaming.tunnelId === tunnelId) {
+        if (streaming.ctl === ws) {
           streaming.res.end();
           streamingResponses.delete(reqId);
         }
@@ -772,7 +788,7 @@ wss.on('connection', (ws) => {
 
       // Clean up pending requests for this tunnel
       for (const [reqId, pending] of pendingRequests) {
-        if (pending.tunnelId === tunnelId) {
+        if (pending.ctl === ws) {
           clearTimeout(pending.timer);
           if (!pending.res.headersSent) {
             pending.res.writeHead(502, { 'Content-Type': 'text/plain' });
@@ -784,7 +800,7 @@ wss.on('connection', (ws) => {
 
       // Clean up pending upgrades
       for (const [connId, pending] of pendingUpgrades) {
-        if (pending.tunnelId === tunnelId) {
+        if (pending.ctl === ws) {
           clearTimeout(pending.timer);
           pending.browserWs.close(1001, 'Tunnel disconnected');
           pendingUpgrades.delete(connId);
@@ -796,9 +812,7 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('error', () => {
-    if (tunnelId) {
-      clients.delete(tunnelId);
-    }
+    if (owns()) clients.delete(tunnelId);
   });
 });
 
