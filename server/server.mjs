@@ -236,13 +236,24 @@ function stripTokenParam(urlPath) {
   }
 }
 
-/** Set CORS headers on a tunneled response. All tunnel traffic is cross-origin. */
+/** Set CORS headers on a tunneled response. All tunnel traffic is cross-origin.
+ *
+ * The tunnel answers preflight itself (OPTIONS never reaches the origin app),
+ * so the allow-headers grant must cover whatever custom headers the tunneled
+ * app's clients send — which this server cannot know in advance. Reflect the
+ * browser's Access-Control-Request-Headers verbatim: it lists exactly the
+ * headers the real request will carry, and a `*` wildcard is not an option
+ * because allow-credentials is true (the spec ignores `*` there). The fixed
+ * list remains as the fallback for non-preflight responses, which carry no
+ * request-headers hint. (First real casualty of the fixed list: PeakHealth
+ * EMR multi-tenant surfaces send X-Active-Tenant-Id — every preflight failed.) */
 function setCorsHeaders(req, res) {
   const origin = req.headers.origin;
   if (origin) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Sandbox-Id');
+    const requested = req.headers['access-control-request-headers'];
+    res.setHeader('Access-Control-Allow-Headers', requested || 'Content-Type, Authorization, X-Sandbox-Id');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
 }
